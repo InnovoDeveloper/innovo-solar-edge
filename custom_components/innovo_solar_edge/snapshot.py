@@ -1,18 +1,16 @@
-"""Dashboard image (720 x 720 PNG) for controllers that can only show pictures.
+"""Dashboard screens (720 x 720 PNG) for controllers that can only show pictures.
 
-Rendered with Pillow every 60 s from the energy model: power flow (solar, grid,
-house, battery), today's totals, price and solar performance - the Solar &
-Energy dashboard without its settings panel. Exposed as an image entity
-(authenticated) and, if enabled in the options, as a file under /local with an
-unguessable name so a controller can load it with a plain URL.
+Six pages drawn by screens.py - live, today, battery, money, solar, week. The
+first four are redrawn every 60 s, solar and week every 10 minutes. Each page is
+an image entity (authenticated); with the 'Publish the dashboard image' option
+each page is also written under /local with an unguessable name so a controller
+can load it with a plain URL.
 """
 
 from __future__ import annotations
 
 import datetime
-import io
 import logging
-import math
 import os
 import secrets
 
@@ -22,212 +20,142 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
+from .screens import PAGES, SIZE, render
+
 _LOGGER = logging.getLogger(__name__)
 
 CONF_SNAPSHOT_FILE = "energy_snapshot_file"
-SIZE = 720
 INTERVAL = datetime.timedelta(seconds=60)
+SLOW_PAGES = {"solar": 10, "week": 10}  # redraw every N minutes
 WWW_DIR = "innovo_solar_edge"
-
-BG = (17, 20, 24)
-CARD = (29, 34, 41)
-LINE = (52, 60, 70)
-TEXT = (232, 234, 237)
-MUTED = (154, 160, 166)
-SOLAR = (244, 180, 0)
-GRID = (79, 140, 247)
-HOUSE = (167, 139, 250)
-BATTERY = (52, 168, 83)
-BAD = (234, 67, 53)
-
-BOLD_FONTS = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
-]
-REGULAR_FONTS = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-]
+MAIN_PAGE = "live"
 
 
-def _font(size: int, bold: bool = False):
-    from PIL import ImageFont
+def screen_data(model) -> dict:
+    """Everything the screens need, as plain values (built in the event loop)."""
+    from .tariff import SRC_PLAN, plan_price
 
-    for path in BOLD_FONTS if bold else REGULAR_FONTS:
-        if os.path.exists(path):
-            return ImageFont.truetype(path, size)
-    return ImageFont.load_default(size=size)
-
-
-def _kw(watts) -> str:
-    return "—" if watts is None else f"{abs(watts) / 1000:.1f} kW"
-
-
-def _num(value, unit: str = "", digits: int = 1) -> str:
-    return "—" if value is None else f"{value:.{digits}f}{unit}"
-
-
-def _money(value, currency: str) -> str:
-    if value is None:
-        return "—"
-    symbol = "$" if currency in ("USD", "CAD", "AUD", "NZD") else f"{currency} "
-    return f"{symbol}{value:.2f}"
-
-
-def _price(value, currency: str) -> str:
-    if value is None:
-        return "—"
-    if currency in ("USD", "CAD", "AUD", "NZD"):
-        return f"{value * 100:.1f}¢"
-    return f"{value:.3f} {currency}"
-
-
-def render(snapshot: dict) -> bytes:
-    """Draw the dashboard. `snapshot` is a plain dict built in the event loop."""
-    from PIL import Image, ImageDraw
-
-    img = Image.new("RGB", (SIZE, SIZE), BG)
-    d = ImageDraw.Draw(img)
-    f_title, f_big, f_mid = _font(30, True), _font(26, True), _font(20, True)
-    f_txt, f_small = _font(18), _font(15)
-    cur = snapshot["currency"]
-
-    # header
-    d.text((24, 18), "Solar & Energy", font=f_title, fill=TEXT)
-    d.text((24, 56), snapshot["inverter"] or "—", font=f_small, fill=MUTED)
-    stamp = f"Updated {snapshot['time']}"
-    d.text((SIZE - 24 - d.textlength(stamp, font=f_small), 26), stamp, font=f_small, fill=MUTED)
-    price = f"{_price(snapshot['price'], cur)}  {snapshot['period'] or ''}".strip()
-    d.text((SIZE - 24 - d.textlength(price, font=f_mid), 48), price, font=f_mid, fill=SOLAR)
-
-    # power flow: nodes around a hub, line colour/width shows active flows
-    hub = (360, 285)
-    nodes = {
-        "solar": ((360, 150), SOLAR, "Solar", _kw(snapshot["solar_w"])),
-        "grid": ((130, 285), GRID, "Grid", _kw(snapshot["grid_w"])),
-        "house": ((590, 285), HOUSE, "Home", _kw(snapshot["house_w"])),
-        "battery": ((360, 420), BATTERY, "Battery", _kw(snapshot["battery_w"])),
-    }
-    grid_w, batt_w, solar_w = snapshot["grid_w"] or 0, snapshot["battery_w"] or 0, snapshot["solar_w"] or 0
-    flows = {
-        "solar": solar_w > 50,
-        "grid": abs(grid_w) > 50,
-        "house": (snapshot["house_w"] or 0) > 50,
-        "battery": abs(batt_w) > 100,
-    }
-    # direction: True = towards the hub
-    inward = {"solar": True, "grid": grid_w > 0, "house": False, "battery": batt_w < 0}
-    for key, ((x, y), color, _label, _value) in nodes.items():
-        active = flows[key]
-        d.line([(x, y), hub], fill=color if active else LINE, width=6 if active else 3)
-        if active:  # arrow head halfway along the line
-            mx, my = (x + hub[0]) / 2, (y + hub[1]) / 2
-            ang = math.atan2(hub[1] - y, hub[0] - x) if inward[key] else math.atan2(y - hub[1], x - hub[0])
-            tip = (mx + 12 * math.cos(ang), my + 12 * math.sin(ang))
-            left = (mx + 12 * math.cos(ang + 2.5), my + 12 * math.sin(ang + 2.5))
-            right = (mx + 12 * math.cos(ang - 2.5), my + 12 * math.sin(ang - 2.5))
-            d.polygon([tip, left, right], fill=color)
-    d.ellipse([hub[0] - 7, hub[1] - 7, hub[0] + 7, hub[1] + 7], fill=MUTED)
-
-    for key, ((x, y), color, label, value) in nodes.items():
-        r = 62
-        d.ellipse([x - r, y - r, x + r, y + r], fill=CARD, outline=color, width=4)
-        d.text((x - d.textlength(label, font=f_small) / 2, y - 36), label, font=f_small, fill=MUTED)
-        d.text((x - d.textlength(value, font=f_mid) / 2, y - 14), value, font=f_mid, fill=TEXT)
-        sub = ""
-        if key == "grid" and flows["grid"]:
-            sub = "buying" if grid_w > 0 else "selling"
-        elif key == "battery":
-            sub = _num(snapshot["battery_level"], "%", 0)
-        elif key == "solar" and snapshot["solar_share"] is not None:
-            sub = f"{snapshot['solar_share']:.0f}% of home"
-        if sub:
-            col = BAD if sub == "buying" else color
-            d.text((x - d.textlength(sub, font=f_small) / 2, y + 14), sub, font=f_small, fill=col)
-
-    # battery state under the hub
-    if snapshot["battery_state"]:
-        state = snapshot["battery_state"]
-        d.text((470, 405), state, font=f_txt, fill=BATTERY)
-
-    def tiles(y, items, h=92):
-        n = len(items)
-        gap, x0 = 10, 24
-        w = (SIZE - 2 * x0 - gap * (n - 1)) / n
-        for i, (label, value, color) in enumerate(items):
-            x = x0 + i * (w + gap)
-            d.rounded_rectangle([x, y, x + w, y + h], radius=12, fill=CARD)
-            d.text((x + 12, y + 12), label, font=f_small, fill=MUTED)
-            d.text((x + 12, y + 40), value, font=f_big, fill=color)
-
-    d.text((24, 494), "Today", font=f_mid, fill=TEXT)
-    tiles(522, [
-        ("Solar kWh", _num(snapshot["solar_today"]), SOLAR),
-        ("Home kWh", _num(snapshot["house_today"]), HOUSE),
-        ("Bought kWh", _num(snapshot["import_today"]), GRID),
-        ("Sold kWh", _num(snapshot["export_today"]), BATTERY),
-        ("Cost", _money(snapshot["cost_today"], cur), TEXT),
-    ])
-    clean = snapshot["cleaning"] or "—"
-    tiles(620, [
-        ("Self-sufficient", _num(snapshot["self_sufficiency"], "%", 0), BATTERY),
-        ("Panels vs spec", _num(snapshot["efficiency"], "%", 0), SOLAR),
-        ("Health", snapshot["health"] or "—", TEXT),
-        ("Clean panels", clean, BAD if clean == "Yes" else TEXT),
-    ], h=70)
-
-    if snapshot["next_change"]:
-        d.text((24, 697), snapshot["next_change"], font=f_small, fill=MUTED)
-
-    out = io.BytesIO()
-    img.save(out, format="PNG", optimize=True)
-    return out.getvalue()
-
-
-def build_snapshot(model) -> dict:
+    hass = model.hass
     v = model.values
-    today = v.get("today") or {}
-    nxt = v.get("next_price")
-    cur = model.hass.config.currency
-    next_text = None
-    if nxt and nxt.get("at"):
-        at = dt_util.as_local(nxt["at"]).strftime("%H:%M")
-        next_text = f"Next price change {at}: {_price(nxt.get('price'), cur)} {nxt.get('period') or ''}".strip()
-    return {
+    now = dt_util.now()
+    today = now.date().isoformat()
+    cur = hass.config.currency
+    settings = model.settings
+    data = {
+        "now": now,
         "currency": cur,
-        "time": dt_util.now().strftime("%H:%M"),
         "inverter": v.get("inverter_status"),
-        "price": v.get("price"),
-        "period": v.get("period"),
         "solar_w": v.get("solar_w"),
-        "grid_w": v.get("grid_w"),
         "house_w": v.get("house_w"),
+        "grid_w": v.get("grid_w"),
         "battery_w": v.get("battery_w"),
         "battery_level": v.get("battery_level"),
         "battery_state": v.get("battery_state"),
         "solar_share": v.get("solar_share_now"),
-        "solar_today": today.get("solar"),
-        "house_today": v.get("house_today"),
-        "import_today": today.get("import"),
-        "export_today": today.get("export"),
+        "price": v.get("price"),
+        "period": v.get("period"),
+        "saved_today": v.get("saved_today"),
         "cost_today": v.get("cost_today"),
+        "today": v.get("today") or {},
+        "house_today": v.get("house_today"),
         "self_sufficiency": v.get("self_sufficiency_today"),
+        "reserve": settings.get("reserve"),
+        "capacity": settings.get("battery_kwh"),
         "efficiency": v.get("efficiency_spec"),
         "health": v.get("health"),
         "cleaning": v.get("cleaning"),
-        "next_change": next_text,
+        "array_kw": v.get("array_kw"),
+        "best_kwh": v.get("best_kwh"),
+        "best_date": v.get("best_date"),
+        "avg7": v.get("avg7"),
+        "lifetime_avg": v.get("lifetime_avg"),
     }
+
+    series = model.data.get("series") or {}
+    data["series"] = list(series.get("pts") or []) if series.get("date") == today else []
+
+    # battery time to full / to reserve
+    bw, level, cap = v.get("battery_w"), v.get("battery_level"), settings.get("battery_kwh") or 0
+    reserve = settings.get("reserve") or 0
+    if bw and level is not None and cap:
+        if bw > 150:
+            data["time_to_full"] = (100 - level) / 100 * cap / (bw / 1000)
+        elif bw < -150:
+            data["time_to_empty"] = max(level - reserve, 0) / 100 * cap / (-bw / 1000)
+
+    # next price change
+    nxt = v.get("next_price")
+    if nxt and nxt.get("at"):
+        data["next"] = {"price": nxt.get("price"), "period": nxt.get("period"),
+                        "at": dt_util.as_local(nxt["at"]).strftime("%H:%M")}
+
+    # today's price timeline (15-minute slots) from the rate plan
+    tariff = model.tariff
+    if tariff.plan and tariff.state.get("source") == SRC_PLAN and not tariff.state.get("override"):
+        midnight = dt_util.start_of_local_day()
+        usage_day = (v.get("today") or {}).get("import")
+        data["price_slots"] = [
+            plan_price(tariff.plan, midnight + datetime.timedelta(minutes=15 * i), usage_day, None)[:2]
+            for i in range(96)
+        ]
+
+    # sun
+    try:
+        from homeassistant.helpers.sun import get_astral_event_date
+
+        rise = get_astral_event_date(hass, "sunrise", now.date())
+        sset = get_astral_event_date(hass, "sunset", now.date())
+        if rise and sset:
+            rise, sset = dt_util.as_local(rise), dt_util.as_local(sset)
+            data["sun"] = {
+                "rise": rise.strftime("%H:%M"),
+                "set": sset.strftime("%H:%M"),
+                "progress": (now - rise).total_seconds() / (sset - rise).total_seconds(),
+            }
+    except Exception:  # no location configured
+        pass
+
+    # history: 30 days vs typical, last 7 days, week comparisons
+    history = model.data.get("history") or []
+    data["days30"] = [(d[0], d[1], model._typical_day(d[0])) for d in history[-30:]]
+    days = [
+        {"date": d[0], "solar": d[1], "house": d[2], "import": d[3],
+         "cost": d[5] if len(d) > 5 else None, "saved": d[6] if len(d) > 6 else None}
+        for d in history
+    ]
+    t = v.get("today") or {}
+    days.append({"date": today, "solar": t.get("solar"), "house": v.get("house_today"), "import": t.get("import"),
+                 "cost": v.get("cost_today"), "saved": v.get("saved_today"), "today": True})
+    week = days[-7:]
+    for day in week:
+        day["label"] = datetime.date.fromisoformat(day["date"]).strftime("%a").upper()
+        day["today"] = day.get("today", False)
+        house, imp = day.get("house"), day.get("import")
+        day["ss"] = (1 - imp / house) * 100 if house and imp is not None else None
+    data["week"] = week
+    data["week_totals"] = {k: sum((d.get(k) or 0) for d in week) for k in ("solar", "house", "import")}
+    saved = [d["saved"] for d in days[-7:] if d.get("saved") is not None]
+    costs = [d["cost"] for d in days[-7:] if d.get("cost") is not None]
+    data["week_saved"] = sum(saved) if saved else None
+    data["week_cost"] = sum(costs) if costs else None
+    if len(days) >= 15:
+        this = sum((d.get("solar") or 0) for d in days[-8:-1])
+        prev = sum((d.get("solar") or 0) for d in days[-15:-8])
+        data["week_change"] = (this / prev - 1) * 100 if prev else None
+    return data
 
 
 class SnapshotPublisher:
-    """Renders the image every minute; keeps the bytes and optionally a /local file."""
+    """Renders the pages on a timer; keeps the PNG bytes and optional /local files."""
 
     def __init__(self, model):
         self.model = model
         self.hass: HomeAssistant = model.hass
-        self.image: bytes | None = None
-        self.updated: datetime.datetime | None = None
+        self.images: dict[str, bytes] = {}
+        self.updated: dict[str, datetime.datetime] = {}
         self._unsub = None
+        self._ticks = 0
+        self._ready = False
         if not model.data.get("snapshot_secret"):
             model.data["snapshot_secret"] = secrets.token_urlsafe(12)
             model.save_soon()
@@ -236,16 +164,19 @@ class SnapshotPublisher:
     def file_enabled(self) -> bool:
         return bool(self.model.entry.options.get(CONF_SNAPSHOT_FILE, False))
 
-    @property
-    def url_path(self) -> str | None:
+    def file_name(self, page: str) -> str:
+        secret = self.model.data["snapshot_secret"]
+        return f"dashboard-{secret}.png" if page == MAIN_PAGE else f"dashboard-{secret}-{page}.png"
+
+    def url_path(self, page: str = MAIN_PAGE) -> str | None:
         if not self.file_enabled:
             return None
-        return f"/local/{WWW_DIR}/dashboard-{self.model.data['snapshot_secret']}.png"
+        return f"/local/{WWW_DIR}/{self.file_name(page)}"
 
     @callback
     def start(self) -> None:
         self._unsub = async_track_time_interval(self.hass, self._tick, INTERVAL)
-        self.hass.async_create_background_task(self._tick(), "innovo_solar_edge snapshot")
+        self.hass.async_create_background_task(self._tick(force=True), "innovo_solar_edge screens")
 
     @callback
     def stop(self) -> None:
@@ -253,21 +184,33 @@ class SnapshotPublisher:
             self._unsub()
             self._unsub = None
 
-    async def _tick(self, _now=None) -> None:
+    async def _tick(self, _now=None, force: bool = False) -> None:
+        self._ticks += 1
         try:
-            data = build_snapshot(self.model)
-            self.image = await self.hass.async_add_executor_job(render, data)
-            self.updated = dt_util.utcnow()
-            if self.file_enabled:
-                await self.hass.async_add_executor_job(self._write_file, self.image)
-            self.model.notify()
+            data = screen_data(self.model)
         except Exception:
-            _LOGGER.exception("Dashboard image render failed")
+            _LOGGER.exception("Screen data failed")
+            return
+        ready = data.get("inverter") is not None and data.get("house_w") is not None
+        if ready and not self._ready:
+            self._ready, force = True, True  # redraw everything once real data has arrived
+        pages = [p for p in PAGES if force or p not in self.images or self._ticks % SLOW_PAGES.get(p, 1) == 0]
+        for page in pages:
+            try:
+                png = await self.hass.async_add_executor_job(render, page, data)
+            except Exception:
+                _LOGGER.exception("Rendering the %s screen failed", page)
+                continue
+            self.images[page] = png
+            self.updated[page] = dt_util.utcnow()
+            if self.file_enabled:
+                await self.hass.async_add_executor_job(self._write_file, page, png)
+        self.model.notify()
 
-    def _write_file(self, image: bytes) -> None:
+    def _write_file(self, page: str, image: bytes) -> None:
         folder = self.hass.config.path("www", WWW_DIR)
         os.makedirs(folder, exist_ok=True)
-        target = os.path.join(folder, f"dashboard-{self.model.data['snapshot_secret']}.png")
+        target = os.path.join(folder, self.file_name(page))
         tmp = target + ".tmp"
         with open(tmp, "wb") as handle:
             handle.write(image)
@@ -279,21 +222,30 @@ def _base():
     return EnergyEntityMixin
 
 
-class DashboardImage(_base(), ImageEntity):
+class ScreenImage(_base(), ImageEntity):
     _attr_content_type = "image/png"
-    _attr_name = "Dashboard Image"
-    _attr_icon = "mdi:monitor-dashboard"
 
-    def __init__(self, model):
+    def __init__(self, model, page: str):
         ImageEntity.__init__(self, model.hass)
-        _base().__init__(self, model, "dashboard_image", "energy_dashboard_image", "image")
+        if page == MAIN_PAGE:  # keeps the original entity for existing installs
+            _base().__init__(self, model, "dashboard_image", "energy_dashboard_image", "image")
+            self._attr_name = "Dashboard Image"
+        else:
+            _base().__init__(self, model, f"screen_{page}", f"energy_screen_{page}", "image")
+            self._attr_name = f"Screen {page.title()}"
+        self._page = page
+        self._attr_icon = "mdi:monitor-dashboard"
 
     @property
     def image_last_updated(self):
-        return self._model.snapshot.updated
+        return self._model.snapshot.updated.get(self._page)
+
+    @property
+    def extra_state_attributes(self):
+        return {"page": self._page, "size": f"{SIZE}x{SIZE}"}
 
     async def async_image(self) -> bytes | None:
-        return self._model.snapshot.image
+        return self._model.snapshot.images.get(self._page)
 
 
 class DashboardImageUrl(_base(), SensorEntity):
@@ -305,8 +257,19 @@ class DashboardImageUrl(_base(), SensorEntity):
 
     @property
     def native_value(self):
-        return self._model.snapshot.url_path or "disabled"
+        return self._model.snapshot.url_path() or "disabled"
 
     @property
     def extra_state_attributes(self):
-        return {"size": f"{SIZE}x{SIZE}", "refresh_seconds": int(INTERVAL.total_seconds())}
+        snap = self._model.snapshot
+        return {
+            "size": f"{SIZE}x{SIZE}",
+            "refresh_seconds": int(INTERVAL.total_seconds()),
+            "pages": {p: snap.url_path(p) for p in PAGES} if snap.file_enabled else None,
+            "image_entities": {p: ("image.energy_dashboard_image" if p == MAIN_PAGE else f"image.energy_screen_{p}")
+                               for p in PAGES},
+        }
+
+
+def screen_images(model) -> list[ImageEntity]:
+    return [ScreenImage(model, page) for page in PAGES]

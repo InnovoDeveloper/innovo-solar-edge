@@ -30,9 +30,13 @@ All inverter, meter and battery entities of the upstream integration, plus a
 - **System settings** as entities: panel count, panel watts, tilt, azimuth,
   battery usable capacity (defaults to the battery nameplate), commissioning
   date.
-- **Dashboard image**: a 720 × 720 PNG of the Solar & Energy view (energy flow,
-  battery, today, price, performance), redrawn every 60 s, as an image entity and
-  optionally as a file under `/local` for controllers that can only show pictures.
+- **Dashboard screens**: six 720 × 720 PNG screens for controllers that can only
+  show pictures - *Live* (animated-style energy flow with the sun's path),
+  *Today* (24 h chart with price periods), *Battery* (charge ring, time to
+  full/reserve), *Money* (saved today, price timeline), *Solar Health*
+  (efficiency gauge, 30 days vs typical) and *Week*. Redrawn every 1-10 minutes as
+  image entities (`image.energy_dashboard_image`, `image.energy_screen_<page>`)
+  and optionally as files under `/local`.
 - **Provisioning**: one action builds the HA Energy dashboard and a
   *Solar & Energy* dashboard from the site's own entities.
 - **Electricity rate plan**: time-of-use prices with seasons, weekday/weekend

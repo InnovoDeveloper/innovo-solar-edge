@@ -81,6 +81,7 @@ DEFAULT_SETTINGS = {
     "battery_kwh": None,
     "commissioned": None,
     "confirmed": False,
+    "reserve": 10,
 }
 FALLBACK_BATTERY_KWH = 10.0
 
@@ -149,6 +150,7 @@ class EnergyModel:
             "month": stored.get("month"),
             "tariff": stored.get("tariff"),
             "snapshot_secret": stored.get("snapshot_secret"),
+            "series": stored.get("series") or {"date": None, "pts": []},
         }
         from .tariff import SRC_PLAN, SRC_SENSOR, TariffManager
 
@@ -188,6 +190,7 @@ class EnergyModel:
 
     @callback
     def async_start(self) -> None:
+        self.hass.async_create_background_task(self._async_backfill_series(), f"{DOMAIN} series backfill")
         self._unsubs.append(self.coordinator.async_add_listener(self._on_coordinator_update))
         self._update_array_issue()
         self.snapshot.start()
@@ -304,6 +307,7 @@ class EnergyModel:
             self._compute_live(raw)
             self._accumulate(raw)
             self._compute_today(raw)
+            self._record_series()
             self._compute_metrics()
         except Exception:  # never take the integration down over a derived value
             _LOGGER.exception("Energy model update failed")
@@ -425,9 +429,10 @@ class EnergyModel:
                 self.data["history"].append([
                     day["date"], closing["solar"], closing["house"],
                     closing["import"], closing["export"],
+                    closing.get("cost"), closing.get("saved"),
                 ])
                 self.data["history"] = self.data["history"][-HISTORY_DAYS:]
-            day = self.data["today"] = {"date": today, "start": dict(cur), "cost": 0.0, "credit": 0.0}
+            day = self.data["today"] = {"date": today, "start": dict(cur), "cost": 0.0, "credit": 0.0, "saved": 0.0}
 
         start = day["start"]
         for key, value in cur.items():
@@ -464,6 +469,13 @@ class EnergyModel:
         house = None
         if None not in t.values():
             house = max(t["import"] - t["export"] + t["solar"] - t["charged"] + t["discharged"], 0)
+            prev_house, prev_import = day.get("prev_house"), day.get("prev_import")
+            if prev_house is not None and prev_import is not None and rate["price"] is not None:
+                self_kwh = (house - prev_house) - (t["import"] - prev_import)
+                if 0 < self_kwh < 5:
+                    day["saved"] = day.get("saved", 0.0) + self_kwh * rate["price"]
+            day["prev_house"], day["prev_import"] = house, t["import"]
+        v["saved_today"] = round(day.get("saved", 0.0), 2)
         v["today"] = t
         v["house_today"] = house
         v["self_sufficiency_today"] = (
@@ -475,7 +487,74 @@ class EnergyModel:
             self.data["last_today"] = {
                 "date": today, "solar": round(t["solar"], 2), "house": round(house, 2),
                 "import": round(t["import"], 2), "export": round(t["export"], 2),
+                "cost": v["cost_today"], "saved": v["saved_today"],
             }
+
+    # ----- 5-minute power history for today's chart -----
+
+    def _record_series(self) -> None:
+        """Average each 5-minute bucket: [minute, solar, house, grid, battery, battery %]."""
+        v = self.values
+        now = dt_util.now()
+        today = now.date().isoformat()
+        series = self.data["series"]
+        if series.get("date") != today:
+            self.data["series"] = series = {"date": today, "pts": []}
+            self._bucket = None
+        minute = now.hour * 60 + now.minute
+        key = minute - minute % 5
+        sample = [v.get("solar_w"), v.get("house_w"), v.get("grid_w"), v.get("battery_w"), v.get("battery_level")]
+        bucket = getattr(self, "_bucket", None)
+        if bucket and bucket["key"] != key:
+            point = [bucket["key"]] + [
+                round(total / count) if count else None for total, count in zip(bucket["sum"], bucket["n"])
+            ]
+            series["pts"] = [p for p in series["pts"] if p[0] != bucket["key"]] + [point]
+            bucket = None
+        if bucket is None:
+            bucket = {"key": key, "sum": [0.0] * 5, "n": [0] * 5}
+        for i, value in enumerate(sample):
+            if value is not None:
+                bucket["sum"][i] += value
+                bucket["n"][i] += 1
+        self._bucket = bucket
+
+    async def _async_backfill_series(self) -> None:
+        """Fill today's chart from HA's 5-minute statistics after an install or restart."""
+        try:
+            from homeassistant.components.recorder import get_instance
+            from homeassistant.components.recorder.statistics import statistics_during_period
+
+            reg = er.async_get(self.hass)
+            keys = ["solar_power", "house_power", "grid_power", "battery_power", "battery_level"]
+            ids = [reg.async_get_entity_id("sensor", DOMAIN, f"{self.uid_base}_{k}") for k in keys]
+            if not any(ids):
+                return
+            midnight = dt_util.start_of_local_day()
+            stats = await get_instance(self.hass).async_add_executor_job(
+                statistics_during_period, self.hass, midnight, None, {i for i in ids if i},
+                "5minute", None, {"mean"},
+            )
+            rows: dict[int, list] = {}
+            for col, entity_id in enumerate(ids):
+                for row in stats.get(entity_id, []) if entity_id else []:
+                    start = row["start"]
+                    start = dt_util.utc_from_timestamp(start) if isinstance(start, (int, float)) else start
+                    local = dt_util.as_local(start)
+                    minute = local.hour * 60 + local.minute
+                    rows.setdefault(minute, [minute, None, None, None, None, None])
+                    if row.get("mean") is not None:
+                        rows[minute][col + 1] = round(row["mean"])
+            series = self.data["series"]
+            today = dt_util.now().date().isoformat()
+            if series.get("date") != today:
+                self.data["series"] = series = {"date": today, "pts": []}
+            have = {p[0] for p in series["pts"]}
+            merged = series["pts"] + [r for m, r in rows.items() if m not in have]
+            series["pts"] = sorted(merged, key=lambda p: p[0])
+            _LOGGER.debug("Backfilled %d chart points from statistics", len(rows))
+        except Exception as err:  # the chart just starts empty
+            _LOGGER.debug("Chart backfill skipped: %s", err)
 
     # ----- performance -----
 
@@ -620,6 +699,7 @@ SENSORS = [
     ("battery_discharged_today", "energy_battery_discharged_today", "Battery Discharged Today", KWH, ENERGY, None, "mdi:battery-arrow-down", _today("discharged")),
     ("self_sufficiency_today", "energy_self_sufficiency_today", "Self Sufficiency Today", PCT, None, MEAS, "mdi:leaf", lambda m: m.values.get("self_sufficiency_today")),
     ("grid_cost_today", "energy_grid_cost_today", "Grid Cost Today", "CUR", MONEY, None, "mdi:currency-usd", lambda m: m.values.get("cost_today")),
+    ("saved_today", "energy_saved_today", "Saved Today", "CUR", MONEY, None, "mdi:piggy-bank", lambda m: m.values.get("saved_today")),
     # performance
     ("solar_array_size", "energy_solar_array_size", "Solar Array Size", "kW", None, None, "mdi:solar-panel-large", lambda m: m.values.get("array_kw")),
     ("solar_typical_today", "energy_solar_typical_today", "Solar Typical Today", KWH, None, None, "mdi:weather-sunny", lambda m: m.values.get("typical_today")),
@@ -707,6 +787,7 @@ NUMBERS = [
     ("tilt", "energy_solar_array_tilt", "Solar Array Tilt", 0, 90, 1, "°", "mdi:angle-acute"),
     ("azimuth", "energy_solar_array_azimuth", "Solar Array Azimuth", 0, 359, 1, "°", "mdi:compass"),
     ("battery_kwh", "energy_battery_capacity", "Battery Usable Capacity", 0.5, 200, 0.01, KWH, "mdi:battery-high"),
+    ("reserve", "energy_battery_reserve", "Battery Reserve", 0, 100, 1, PERCENTAGE, "mdi:battery-lock"),
 ]
 
 
@@ -776,10 +857,10 @@ def energy_numbers(hass: HomeAssistant, entry: ConfigEntry) -> list[NumberEntity
 
 
 def energy_images(hass: HomeAssistant, entry: ConfigEntry) -> list:
-    from .snapshot import DashboardImage
+    from .snapshot import screen_images
 
     model = _model(hass, entry)
-    return [DashboardImage(model)] if model else []
+    return screen_images(model) if model else []
 
 
 def energy_selects(hass: HomeAssistant, entry: ConfigEntry) -> list:
