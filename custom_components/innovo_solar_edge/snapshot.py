@@ -1,7 +1,8 @@
 """Dashboard screens (720 x 720 PNG) for controllers that can only show pictures.
 
-Six pages drawn by screens.py - live, today, battery, money, solar, week. The
-first four are redrawn every 60 s, solar and week every 10 minutes. Each page is
+Seven pages drawn by screens.py - overview, live, today, battery, money, solar,
+week. Most are redrawn every 60 s, solar and week every 10 minutes; a page with
+no data yet shows a "gathering data" placeholder. Each page is
 an image entity (authenticated); with the 'Publish the dashboard image' option
 each page is also written under /local with an unguessable name so a controller
 can load it with a plain URL.
@@ -245,7 +246,12 @@ class ScreenImage(_base(), ImageEntity):
         return {"page": self._page, "size": f"{SIZE}x{SIZE}"}
 
     async def async_image(self) -> bytes | None:
-        return self._model.snapshot.images.get(self._page)
+        image = self._model.snapshot.images.get(self._page)
+        if image is None:  # not drawn yet: serve the "gathering data" placeholder
+            image = await self.hass.async_add_executor_job(
+                render, self._page, {"now": dt_util.now(), "currency": self.hass.config.currency}
+            )
+        return image
 
 
 class DashboardImageUrl(_base(), SensorEntity):

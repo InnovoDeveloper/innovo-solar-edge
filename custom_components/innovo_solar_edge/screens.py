@@ -22,8 +22,9 @@ SIZE = 720
 SS = 2  # supersampling
 C = SIZE * SS
 
-PAGES = ["live", "today", "battery", "money", "solar", "week"]
+PAGES = ["overview", "live", "today", "battery", "money", "solar", "week"]
 TITLES = {
+    "overview": "ENERGY OVERVIEW",
     "live": "LIVE ENERGY",
     "today": "TODAY",
     "battery": "BATTERY",
@@ -270,7 +271,7 @@ class Canvas:
         now = self.data["now"]
         self.text((SIZE - 24, 20), now.strftime("%H:%M"), 30, TEXT, "bold", anchor="ra")
         self.text((SIZE - 24, 54), now.strftime("%a %d %b").upper(), 13, MUTED, "semi", anchor="ra", spacing=1)
-        status = self.data.get("inverter") or "—"
+        status = self.data.get("inverter") or "Waiting"
         col = BATT if status == "Producing" else RED if status.startswith(("Fault", "Offline")) else MUTED
         self.circle(SIZE - 170, 40, 4, fill=col + (255,), glow=0)
         self.g.ellipse([(SIZE - 178) * SS / 2, 32 * SS / 2, (SIZE - 162) * SS / 2, 48 * SS / 2], fill=col)
@@ -303,31 +304,8 @@ class Canvas:
 # Pages
 # ----------------------------------------------------------------------------
 
-def page_live(data: dict) -> bytes:
-    cv = Canvas("live", data)
-    v = data
-    cur = v["currency"]
-
-    # sun arc
-    sun = v.get("sun") or {}
-    cx, cy, rx, ry = 360, 205, 290, 112
-    pts = [(cx + rx * math.cos(math.radians(a)), cy - ry * math.sin(math.radians(a))) for a in range(180, -1, -3)]
-    cv.line(pts, (255, 255, 255), 1.2, alpha=40)
-    frac = sun.get("progress")
-    if frac is not None and 0 <= frac <= 1:
-        done = [p for i, p in enumerate(pts) if i / (len(pts) - 1) <= frac]
-        if len(done) > 1:
-            cv.line(done, SOLAR, 2, glow=5, alpha=200)
-        a = math.radians(180 - 180 * frac)
-        sx, sy = cx + rx * math.cos(a), cy - ry * math.sin(a)
-        cv.circle(sx, sy, 9, fill=SOLAR + (255,))
-        cv.g.ellipse([(sx - 22) * SS / 2, (sy - 22) * SS / 2, (sx + 22) * SS / 2, (sy + 22) * SS / 2], fill=SOLAR)
-    if sun.get("rise"):
-        cv.text((cx - rx, cy + 14), f"SUNRISE {sun['rise']}", 12, MUTED, "semi", anchor="mt", spacing=1)
-    if sun.get("set"):
-        cv.text((cx + rx, cy + 14), f"SUNSET {sun['set']}", 12, MUTED, "semi", anchor="mt", spacing=1)
-
-    nodes = {"solar": (360, 248), "grid": (118, 392), "home": (602, 392), "battery": (360, 520)}
+def _flows(v):
+    """Split the four power readings into the individual flows between nodes."""
     s, h, g, b = (v.get(k) or 0 for k in ("solar_w", "house_w", "grid_w", "battery_w"))
     export, imp = max(-g, 0), max(g, 0)
     chg, dis = max(b, 0), max(-b, 0)
@@ -338,42 +316,82 @@ def page_live(data: dict) -> bytes:
     b2g = max(export - s2g, 0)
     b2h = max(dis - b2g, 0)
     g2h = max(imp - g2b, 0)
+    return {"s2h": s2h, "s2g": s2g, "s2b": s2b, "g2h": g2h, "b2h": b2h, "g2b": g2b, "b2g": b2g,
+            "s": s, "h": h, "g": g, "b": b, "imp": imp, "export": export}
 
+
+def _flow_diagram(cv, v, nodes, r=60, compact=False):
+    """Solar / grid / home / battery nodes with live flows between them."""
+    f = _flows(v)
     S, G, H, B = nodes["solar"], nodes["grid"], nodes["home"], nodes["battery"]
-    cv.flow(cv.bezier(S, (H[0], S[1]), H), SOLAR, s2h)
-    cv.flow(cv.bezier(S, (G[0], S[1]), G), SOLAR, s2g)
-    cv.flow([S, B], SOLAR, s2b)
-    cv.flow([G, H], GRID, g2h)
-    cv.flow(cv.bezier(B, (H[0], B[1]), H), BATT, b2h)
-    cv.flow(cv.bezier(G, (G[0], B[1]), B), GRID, g2b)
-    cv.flow(cv.bezier(B, (G[0], B[1]), G), BATT, b2g)
+    cv.flow(cv.bezier(S, (H[0], S[1]), H), SOLAR, f["s2h"])
+    cv.flow(cv.bezier(S, (G[0], S[1]), G), SOLAR, f["s2g"])
+    cv.flow([S, B], SOLAR, f["s2b"])
+    cv.flow([G, H], GRID, f["g2h"])
+    cv.flow(cv.bezier(B, (H[0], B[1]), H), BATT, f["b2h"])
+    cv.flow(cv.bezier(G, (G[0], B[1]), B), GRID, f["g2b"])
+    cv.flow(cv.bezier(B, (G[0], B[1]), G), BATT, f["b2g"])
+
+    vsize, isize, lsize = (22, 18, 11) if compact else (30, 26, 13)
 
     def node(key, color, label, value, sub=None, sub_color=None, icon=None):
         x, y = nodes[key]
-        r = 60
-        cv.circle(x, y, r + 10, fill=BG_TOP + (255,))
-        cv.circle(x, y, r, fill=(14, 20, 34, 255), outline=color + (255,), width=2.5, glow=6)
-        icon(x, y - 30, 26)
-        cv.text((x, y + 6), value, 30, TEXT, "bold", anchor="mm")
-        cv.text((x + cv.d.textlength(value, font=font(30, "bold")) / SS / 2 + 3, y + 10), "kW", 12, MUTED, "semi", anchor="lm")
+        cv.circle(x, y, r + (6 if compact else 10), fill=BG_TOP + (255,))
+        cv.circle(x, y, r, fill=(14, 20, 34, 255), outline=color + (255,), width=2 if compact else 2.5, glow=5 if compact else 6)
+        icon(x, y - r * 0.5, isize)
+        cv.text((x, y + r * 0.1), value, vsize, TEXT, "bold", anchor="mm")
+        if not compact:
+            cv.text((x + cv.d.textlength(value, font=font(vsize, "bold")) / SS / 2 + 3, y + 10), "kW", 12, MUTED, "semi", anchor="lm")
         if sub:
-            cv.text((x, y + 34), sub, 13, sub_color or color, "semi", anchor="mm", spacing=1)
-        cv.text((x, y + r + (22 if key == "battery" else 16)), label, 13, MUTED, "semi", anchor="mm", spacing=2)
+            cv.text((x, y + r * 0.56), sub, 10 if compact else 13, sub_color or color, "semi", anchor="mm", spacing=1)
+        if label:
+            gap = (22 if key == "battery" else 16) if not compact else (18 if key == "battery" else 13)
+            cv.text((x, y + r + gap), label, lsize, MUTED, "semi", anchor="mm", spacing=2)
 
     level = v.get("battery_level")
-    node("solar", SOLAR, "SOLAR", fmt_kw(s), f"{v['solar_share']:.0f}% OF HOME" if v.get("solar_share") is not None else None,
-         icon=cv.icon_sun)
-    node("grid", GRID, "GRID", fmt_kw(g), "BUYING" if imp > 50 else "SELLING" if export > 50 else "IDLE",
-         RED if imp > 50 else BATT if export > 50 else MUTED, icon=cv.icon_grid)
-    node("home", HOME, "HOME", fmt_kw(h), icon=cv.icon_home)
+    share = v.get("solar_share")
+    unit = " kW" if compact else ""
+    node("solar", SOLAR, "SOLAR", fmt_kw(f["s"]) + unit,
+         None if compact or share is None else f"{share:.0f}% OF HOME", icon=cv.icon_sun)
+    node("grid", GRID, "GRID", fmt_kw(f["g"]) + unit,
+         "BUYING" if f["imp"] > 50 else "SELLING" if f["export"] > 50 else "IDLE",
+         RED if f["imp"] > 50 else BATT if f["export"] > 50 else MUTED, icon=cv.icon_grid)
+    node("home", HOME, "HOME", fmt_kw(f["h"]) + unit, icon=cv.icon_home)
     bx, by = nodes["battery"]
     if level is not None:
-        cv.arc(bx, by, 72, -90, -90 + 360 * level / 100, 5, BATT, BATT2, glow=4)
-    node("battery", BATT, f"BATTERY · {(v.get('battery_state') or '').upper()}".rstrip(" ·"),
-         fmt_kw(b), f"{level:.0f}%" if level is not None else None,
+        cv.arc(bx, by, r + (8 if compact else 12), -90, -90 + 360 * level / 100, 4 if compact else 5, BATT, BATT2, glow=4)
+    state = (v.get("battery_state") or "").upper()
+    node("battery", BATT, f"BATTERY · {state}".rstrip(" ·") if not compact else "BATTERY",
+         fmt_kw(f["b"]) + unit, f"{level:.0f}%" if level is not None else None,
          icon=lambda x, y, sz: cv.icon_battery(x, y, sz, level))
 
-    # KPI strip
+
+def _sun_arc(cv, v, cx, cy, rx, ry, labels=True):
+    sun = v.get("sun") or {}
+    pts = [(cx + rx * math.cos(math.radians(a)), cy - ry * math.sin(math.radians(a))) for a in range(180, -1, -3)]
+    cv.line(pts, (255, 255, 255), 1.2, alpha=40)
+    frac = sun.get("progress")
+    if frac is not None and 0 <= frac <= 1:
+        done = [p for i, p in enumerate(pts) if i / (len(pts) - 1) <= frac]
+        if len(done) > 1:
+            cv.line(done, SOLAR, 2, glow=5, alpha=200)
+        a = math.radians(180 - 180 * frac)
+        sx, sy = cx + rx * math.cos(a), cy - ry * math.sin(a)
+        cv.circle(sx, sy, 8, fill=SOLAR + (255,))
+        cv.g.ellipse([(sx - 20) * SS / 2, (sy - 20) * SS / 2, (sx + 20) * SS / 2, (sy + 20) * SS / 2], fill=SOLAR)
+    if labels and sun.get("rise"):
+        cv.text((cx - rx, cy + 14), f"SUNRISE {sun['rise']}", 12, MUTED, "semi", anchor="mt", spacing=1)
+    if labels and sun.get("set"):
+        cv.text((cx + rx, cy + 14), f"SUNSET {sun['set']}", 12, MUTED, "semi", anchor="mt", spacing=1)
+
+
+def page_live(data: dict) -> bytes:
+    cv = Canvas("live", data)
+    v = data
+    cur = v["currency"]
+    _sun_arc(cv, v, 360, 205, 290, 112)
+    _flow_diagram(cv, v, {"solar": (360, 248), "grid": (118, 392), "home": (602, 392), "battery": (360, 520)})
+
     pcol = period_color(v.get("period"))
     kpis = [
         ("SELF-POWERED", f"{v['solar_share']:.0f}%" if v.get("solar_share") is not None else "—", BATT),
@@ -390,24 +408,15 @@ def page_live(data: dict) -> bytes:
     return cv.png()
 
 
-def _axes_hours(cv, x, y, w, h):
+def _axes_hours(cv, x, y, w, h, size=12):
     for hr in (0, 6, 12, 18, 24):
         gx = x + w * hr / 24
         cv.line([(gx, y), (gx, y + h)], (255, 255, 255), 1, alpha=16)
-        cv.text((gx, y + h + 8), f"{hr:02d}", 12, MUTED, "semi", anchor="mt")
+        cv.text((gx, y + h + 7), f"{hr:02d}", size, MUTED, "semi", anchor="mt")
 
 
-def page_today(data: dict) -> bytes:
-    cv = Canvas("today", data)
-    v, cur = data, data["currency"]
-    x, y, w, h = 44, 118, 640, 290
-    cv.card(24, 88, 672, 368)
-    # legend
-    for i, (label, col) in enumerate((("SOLAR", SOLAR), ("HOME", HOME), ("GRID", GRID), ("BATTERY %", BATT))):
-        lx = 44 + i * 120
-        cv.d.rounded_rectangle([lx * SS, 99 * SS, (lx + 14) * SS, 105 * SS], radius=3 * SS, fill=col + (255,))
-        cv.text((lx + 20, 102), label, 12, MUTED, "semi", anchor="lm", spacing=1)
-
+def _power_chart(cv, v, x, y, w, h, compact=False):
+    """Today's solar area, home and grid lines, battery %, price bands and a NOW marker."""
     pts = v.get("series") or []
     peak = max([max(p[1] or 0, p[2] or 0, abs(p[3] or 0)) for p in pts] + [2000]) * 1.15
 
@@ -417,41 +426,55 @@ def page_today(data: dict) -> bytes:
     def Y(watts):
         return y + h - h * max(min(watts / peak, 1), 0)
 
-    _axes_hours(cv, x, y, w, h)
+    _axes_hours(cv, x, y, w, h, 11 if compact else 12)
     for kw in range(1, int(peak / 1000) + 1):
         gy = Y(kw * 1000)
         cv.line([(x, gy), (x + w, gy)], (255, 255, 255), 1, alpha=12)
-        cv.text((x - 6, gy), f"{kw}", 11, DIM, "semi", anchor="rm")
+        if not compact:
+            cv.text((x - 6, gy), f"{kw}", 11, DIM, "semi", anchor="rm")
 
-    # price bands under the chart
-    slots = v.get("price_slots") or []
-    for i, (price, period) in enumerate(slots):
-        col = period_color(period)
-        cv.d.rectangle([X(i * 15) * SS, (y + h + 1) * SS, X((i + 1) * 15) * SS, (y + h + 5) * SS], fill=col + (170,))
+    for i, (price, period) in enumerate(v.get("price_slots") or []):
+        cv.d.rectangle([X(i * 15) * SS, (y + h + 1) * SS, X((i + 1) * 15) * SS, (y + h + 4) * SS],
+                       fill=period_color(period) + (170,))
 
     if len(pts) > 1:
-        # solar area with vertical gradient
         poly = [(X(p[0]), Y(p[1] or 0)) for p in pts]
         area = Image.new("L", (C, C), 0)
         ImageDraw.Draw(area).polygon([(px * SS, py * SS) for px, py in poly + [(poly[-1][0], y + h), (poly[0][0], y + h)]], fill=255)
         grad = Image.new("RGB", (C, C), SOLAR)
-        fade = Image.linear_gradient("L").resize((C, int(h * SS))).point(lambda val: 255 - int(val * 0.8))
+        fade = Image.linear_gradient("L").resize((C, max(int(h * SS), 1))).point(lambda val: 255 - int(val * 0.8))
         mask = Image.new("L", (C, C), 0)
         mask.paste(fade, (0, int(y * SS)))
         cv.img.paste(grad, (0, 0), ImageChops.multiply(area, mask).point(lambda val: int(val * 0.55)))
-        cv.line(poly, SOLAR, 2.2, glow=5)
-        cv.line([(X(p[0]), Y(max(p[3] or 0, 0))) for p in pts], GRID, 1.8, glow=3, alpha=230)
-        cv.line([(X(p[0]), Y(p[2] or 0)) for p in pts], HOME, 2.2, glow=4)
+        cv.line(poly, SOLAR, 2 if compact else 2.2, glow=4 if compact else 5)
+        cv.line([(X(p[0]), Y(max(p[3] or 0, 0))) for p in pts], GRID, 1.6, glow=3, alpha=230)
+        cv.line([(X(p[0]), Y(p[2] or 0)) for p in pts], HOME, 1.8 if compact else 2.2, glow=4)
         soe = [(X(p[0]), y + h - h * p[5] / 100) for p in pts if p[5] is not None]
         if len(soe) > 1:
-            cv.line(soe, BATT, 1.6, alpha=200)
+            cv.line(soe, BATT, 1.5, alpha=200)
     else:
-        cv.text((360, 260), "COLLECTING TODAY'S DATA…", 16, MUTED, "semi", anchor="mm", spacing=2)
+        cv.text((x + w / 2, y + h / 2), "COLLECTING TODAY'S DATA…", 14 if compact else 16, MUTED, "semi", anchor="mm", spacing=2)
 
     now = v["now"]
     nx = X(now.hour * 60 + now.minute)
     cv.line([(nx, y - 4), (nx, y + h)], CYAN, 1.5, glow=4)
-    cv.text((nx, y - 8), "NOW", 11, CYAN, "bold", anchor="mb", spacing=1)
+    cv.text((nx, y - 7), "NOW", 10 if compact else 11, CYAN, "bold", anchor="mb", spacing=1)
+    return pts
+
+
+def _legend(cv, x, y, items, step):
+    for i, (label, col) in enumerate(items):
+        lx = x + i * step
+        cv.d.rounded_rectangle([lx * SS, (y - 3) * SS, (lx + 14) * SS, (y + 3) * SS], radius=3 * SS, fill=col + (255,))
+        cv.text((lx + 20, y), label, 11, MUTED, "semi", anchor="lm", spacing=1)
+
+
+def page_today(data: dict) -> bytes:
+    cv = Canvas("today", data)
+    v, cur = data, data["currency"]
+    cv.card(24, 88, 672, 368)
+    _legend(cv, 44, 102, (("SOLAR", SOLAR), ("HOME", HOME), ("GRID", GRID), ("BATTERY %", BATT)), 120)
+    pts = _power_chart(cv, v, 44, 118, 640, 290)
 
     t = v.get("today") or {}
     kpis = [("PRODUCED", t.get("solar"), SOLAR), ("USED", v.get("house_today"), HOME),
@@ -478,6 +501,72 @@ def page_today(data: dict) -> bytes:
     cv.text((676, 596), "GRID COST", 12, MUTED, "semi", anchor="ra", spacing=2)
     cv.text((676, 614), fmt_money(v.get("cost_today"), cur), 30, TEXT, "bold", anchor="ra")
     cv.text((676, 652), f"SAVED {fmt_money(v.get('saved_today'), cur)}", 13, BATT, "semi", anchor="ra", spacing=1)
+    return cv.png()
+
+
+def page_overview(data: dict) -> bytes:
+    """Everything at a glance: flow, battery, today's chart and the key numbers."""
+    cv = Canvas("overview", data)
+    v, cur = data, data["currency"]
+
+    # flow (left)
+    cv.card(24, 88, 420, 300)
+    cv.text((40, 100), "LIVE FLOW", 11, MUTED, "semi", spacing=2)
+    _sun_arc(cv, v, 234, 168, 170, 52, labels=False)
+    _flow_diagram(cv, v, {"solar": (234, 170), "grid": (92, 268), "home": (376, 268), "battery": (234, 330)},
+                  r=36, compact=True)
+
+    # battery (right)
+    level = v.get("battery_level")
+    cv.card(456, 88, 240, 300)
+    cv.text((472, 100), "BATTERY", 11, MUTED, "semi", spacing=2)
+    bx, by, br = 576, 222, 76
+    cv.arc(bx, by, br, -90, -90 + 360 * (level or 0) / 100, 14, BATT2, BATT, glow=8)
+    reserve = v.get("reserve")
+    if reserve is not None:
+        a = math.radians(-90 + 360 * reserve / 100)
+        cv.line([(bx + math.cos(a) * (br - 10), by + math.sin(a) * (br - 10)),
+                 (bx + math.cos(a) * (br + 10), by + math.sin(a) * (br + 10))], RED, 2.5, glow=2)
+    cv.glow_text((bx, by - 4), "—" if level is None else f"{level:.0f}%", 40, TEXT, "bold")
+    state = (v.get("battery_state") or "—").upper()
+    scol = BATT if state == "CHARGING" else SOLAR if state == "DISCHARGING" else CYAN
+    cv.text((bx, by + 28), state, 12, scol, "bold", anchor="mm", spacing=2)
+    bw = v.get("battery_w")
+    ttl = fmt_duration(v.get("time_to_full")) if (bw or 0) > 150 else fmt_duration(v.get("time_to_empty"))
+    sub = (f"FULL IN {ttl}" if (bw or 0) > 150 else f"RESERVE IN {ttl}") if ttl else \
+        ("" if bw is None else f"{abs(bw) / 1000:.1f} kW")
+    cv.text((bx, 334), sub, 13, MUTED, "semi", anchor="mm", spacing=1)
+    t = v.get("today") or {}
+    cv.text((bx, 362), f"IN {t.get('charged') or 0:.1f}  ·  OUT {t.get('discharged') or 0:.1f} kWh", 11, DIM, "semi",
+            anchor="mm", spacing=1)
+
+    # today chart (middle)
+    cv.card(24, 400, 672, 176)
+    cv.text((40, 412), "TODAY", 11, MUTED, "semi", spacing=2)
+    _legend(cv, 140, 412, (("SOLAR", SOLAR), ("HOME", HOME), ("GRID", GRID), ("BATT %", BATT)), 92)
+    cv.text((680, 412), f"{t.get('solar') or 0:.1f} kWh SOLAR  ·  {v.get('house_today') or 0:.1f} kWh HOME", 11, MUTED,
+            "semi", anchor="rm", spacing=1)
+    _power_chart(cv, v, 40, 436, 640, 104, compact=True)
+
+    # key numbers (bottom)
+    pcol = period_color(v.get("period"))
+    eff = v.get("efficiency")
+    health = v.get("health") or "—"
+    clean = v.get("cleaning")
+    ss = v.get("self_sufficiency")
+    tiles = [
+        ("SAVED TODAY", fmt_money(v.get("saved_today"), cur), f"GRID {fmt_money(v.get('cost_today'), cur)}", BATT),
+        ("PRICE NOW", fmt_price(v.get("price"), cur), (v.get("period") or "").upper(), pcol),
+        ("SELF-SUFFICIENT", "—" if ss is None else f"{ss:.0f}%", f"BOUGHT {t.get('import') or 0:.1f} kWh", BATT),
+        ("PANELS VS SPEC", "—" if eff is None else f"{eff:.0f}%",
+         f"{health.upper()}{'  ·  CLEAN' if clean == 'Yes' else ''}", RED if clean == "Yes" else SOLAR),
+    ]
+    for i, (label, value, sub, col) in enumerate(tiles):
+        x = 24 + i * 170
+        cv.card(x, 588, 160, 102, accent=col)
+        cv.text((x + 16, 600), label, 11, MUTED, "semi", spacing=1)
+        cv.text((x + 16, 618), value, 32, col, "bold")
+        cv.text((x + 16, 674), sub, 10, MUTED, "semi", anchor="ls", spacing=1)
     return cv.png()
 
 
@@ -737,6 +826,7 @@ def page_week(data: dict) -> bytes:
 
 
 RENDERERS = {
+    "overview": page_overview,
     "live": page_live,
     "today": page_today,
     "battery": page_battery,
@@ -746,5 +836,38 @@ RENDERERS = {
 }
 
 
+PLACEHOLDER_TEXT = ("Please come back again later,", "we are still gathering the data", "for this page...")
+
+
+def page_placeholder(page: str, data: dict) -> bytes:
+    """Shown until a page has something to show (after install/restart, no history yet)."""
+    data = {**data, "now": data.get("now") or datetime.datetime.now()}
+    cv = Canvas(page, data)
+    cx, cy = 360, 330
+    for i in range(12):  # spinner: fading arc segments
+        a0 = i * 30 - 90
+        col = mix(BG_BOTTOM, CYAN, (i + 1) / 12)
+        cv.arc(cx, cy, 64, a0, a0 + 22, 8, col, col, glow=4 if i > 8 else 0, track=False)
+    cv.circle(cx, cy, 36, outline=(255, 255, 255, 40), width=1.5)
+    for i, line in enumerate(PLACEHOLDER_TEXT):
+        cv.text((cx, cy + 120 + i * 34), line, 24, TEXT if i == 0 else MUTED, "semi", anchor="mm")
+    cv.text((cx, 610), "THIS PAGE REFRESHES AUTOMATICALLY", 12, DIM, "semi", anchor="mm", spacing=3)
+    return cv.png()
+
+
+def is_ready(page: str, data: dict) -> bool:
+    """Whether a page has enough data to be worth drawing."""
+    live = data.get("inverter") is not None and data.get("house_w") is not None
+    if page in ("overview", "live", "battery", "money"):
+        return live
+    if page == "today":
+        return live and len(data.get("series") or []) >= 2
+    if page in ("solar", "week"):
+        return live and len(data.get("days30") or []) >= 1
+    return live
+
+
 def render(page: str, data: dict) -> bytes:
+    if not is_ready(page, data):
+        return page_placeholder(page, data)
     return RENDERERS[page](data)
