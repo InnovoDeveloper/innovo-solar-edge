@@ -1,0 +1,22 @@
+provision_dashboards:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: innovo_solar_edge
+    energy_dashboard:
+      default: true
+      selector:
+        boolean:
+    dashboard:
+      default: true
+      selector:
+        boolean:
+    url_path:
+      example: solar-energy
+      selector:
+        text:
+    title:
+      example: Solar & Energy
+      selector:
+        text:

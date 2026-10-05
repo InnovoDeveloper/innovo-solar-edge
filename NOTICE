@@ -1,0 +1,17 @@
+Innovo Solar Edge
+Copyright 2026 Innovo
+
+This product is a modified version of SolarEdge Modbus Multi
+(https://github.com/WillCodeForCats/solaredge-modbus-multi), v4.0.4,
+licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Modifications by Innovo:
+- Renamed the integration domain to innovo_solar_edge.
+- Added energy.py and date.py: an energy and solar-performance model
+  (derived power flows, daily totals and cost, PVWatts-based typical output,
+  efficiency, health trend and cleaning recommendation, editable system
+  settings), wired into __init__.py, sensor.py, number.py and the options flow.
+- Added provision.py and services.yaml: an action and button that configure
+  the Home Assistant Energy dashboard and build a Solar & Energy dashboard.
+- Child devices are linked to the inverter with via_device_id (registered in
+  __init__.py) instead of the deprecated via_device.
