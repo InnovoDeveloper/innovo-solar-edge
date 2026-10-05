@@ -3,7 +3,7 @@
 Everything here is derived from this integration's own (already scaled)
 inverter, meter and battery entities after each coordinator update, so it
 never adds Modbus traffic. Results are exposed as entities on a "SolarEdge
-Energy" device so that controllers can read the whole picture
+Energy" device so that home-control platforms can read the whole picture
 from this one integration.
 
 Sign conventions: grid power + = importing, battery power + = charging.
@@ -148,15 +148,24 @@ class EnergyModel:
             "typical": stored.get("typical") or {"per_kw": None, "source": None, "params": None},
             "month": stored.get("month"),
             "tariff": stored.get("tariff"),
+            "snapshot_secret": stored.get("snapshot_secret"),
         }
         from .tariff import SRC_PLAN, SRC_SENSOR, TariffManager
 
         default_source = SRC_SENSOR if self.entry.options.get(CONF_PRICE_ENTITY) else SRC_PLAN
         self.tariff = TariffManager(self, default_source)
 
+        from .snapshot import SnapshotPublisher
+
+        self.snapshot = SnapshotPublisher(self)
+
     @property
     def signal(self) -> str:
         return signal_update(self.entry.entry_id)
+
+    @callback
+    def notify(self) -> None:
+        async_dispatcher_send(self.hass, self.signal)
 
     @callback
     def save_soon(self) -> None:
@@ -181,6 +190,7 @@ class EnergyModel:
     def async_start(self) -> None:
         self._unsubs.append(self.coordinator.async_add_listener(self._on_coordinator_update))
         self._update_array_issue()
+        self.snapshot.start()
         self.hass.async_create_background_task(
             self._async_refresh_typical(), f"{DOMAIN} pvwatts lookup"
         )
@@ -197,6 +207,7 @@ class EnergyModel:
             )
 
     async def async_stop(self) -> None:
+        self.snapshot.stop()
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
@@ -654,6 +665,7 @@ class EnergyEntityMixin:
         self.entity_id = f"{domain}.{object_id}"
 
     async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
         self.async_on_remove(async_dispatcher_connect(
             self.hass, signal_update(self._model.entry.entry_id), self.async_write_ha_state
         ))
@@ -749,7 +761,9 @@ def energy_sensors(hass: HomeAssistant, entry: ConfigEntry) -> list[SensorEntity
     model = _model(hass, entry)
     if not model:
         return []
-    return [EnergySensor(model, *spec) for spec in SENSORS] + tariff_sensors(model)
+    from .snapshot import DashboardImageUrl
+
+    return [EnergySensor(model, *spec) for spec in SENSORS] + tariff_sensors(model) + [DashboardImageUrl(model)]
 
 
 def energy_numbers(hass: HomeAssistant, entry: ConfigEntry) -> list[NumberEntity]:
@@ -759,6 +773,13 @@ def energy_numbers(hass: HomeAssistant, entry: ConfigEntry) -> list[NumberEntity
     if not model:
         return []
     return [EnergyNumber(model, *spec) for spec in NUMBERS] + tariff_numbers(model)
+
+
+def energy_images(hass: HomeAssistant, entry: ConfigEntry) -> list:
+    from .snapshot import DashboardImage
+
+    model = _model(hass, entry)
+    return [DashboardImage(model)] if model else []
 
 
 def energy_selects(hass: HomeAssistant, entry: ConfigEntry) -> list:

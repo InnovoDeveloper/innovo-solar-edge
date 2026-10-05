@@ -115,7 +115,8 @@
           "request_timeout": "Modbus Request Timeout (seconds)",
           "sleep_after_write": "Inverter Command Delay (seconds)",
           "energy_price_entity": "Electricity price sensor ($/kWh) for daily cost",
-          "energy_typical_lookup": "Look up typical solar output from NREL PVWatts (sends approximate home location)"
+          "energy_typical_lookup": "Look up typical solar output from NREL PVWatts (sends approximate home location)",
+          "energy_snapshot_file": "Publish the dashboard image as a file under /local (no login needed; unguessable name)"
         }
       }
     },

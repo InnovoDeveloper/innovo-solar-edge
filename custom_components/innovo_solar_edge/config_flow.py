@@ -746,6 +746,9 @@ class SolaredgeModbusMultiOptionsFlowHandler(OptionsFlow):
                 "energy_typical_lookup": self.config_entry.options.get(
                     "energy_typical_lookup", True
                 ),
+                "energy_snapshot_file": self.config_entry.options.get(
+                    "energy_snapshot_file", False
+                ),
             }
 
         return self.async_show_form(
@@ -798,6 +801,11 @@ class SolaredgeModbusMultiOptionsFlowHandler(OptionsFlow):
                     vol.Optional(
                         "energy_typical_lookup",
                         default=user_input.get("energy_typical_lookup", True),
+                    ): cv.boolean,
+                    # Innovo: publish the dashboard image under /local
+                    vol.Optional(
+                        "energy_snapshot_file",
+                        default=user_input.get("energy_snapshot_file", False),
                     ): cv.boolean,
                 },
             ),

@@ -89,6 +89,7 @@ PLATFORMS: list[str] = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
     Platform.DATE,
+    Platform.IMAGE,
     Platform.NUMBER,
     Platform.SELECT,
     Platform.SENSOR,
