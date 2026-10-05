@@ -81,16 +81,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "Možnosti Modbus SolarEdge",
-        "data": {
-          "scan_interval": "Frekvence dotazování (sekundy)",
-          "close_after_polling": "Zavřít připojení po dotazování",
-          "detect_meters": "Automatická detekce měřičů",
-          "detect_batteries": "Automatická detekce baterií",
-          "detect_extras": "Automatická detekce dalších entit",
-          "advanced_power_control": "Možnosti řízení výkonu",
-          "request_timeout": "Časový limit požadavku Modbus (sekundy)",
-          "sleep_after_write": "Zpoždění příkazu střídače (sekundy)"
+        "title": "SolarEdge options",
+        "menu_options": {
+          "settings": "Integration settings",
+          "rate_plan": "Electricity rate plan"
         }
       },
       "adv_pwr_ctl": {
@@ -107,6 +101,19 @@
           "allow_battery_energy_reset": "Povolit reset energie baterie",
           "battery_energy_reset_cycles": "Aktualizační cykly pro reset energie baterie",
           "battery_rating_adjust": "Úprava kapacity baterie (procenta)"
+        }
+      },
+      "settings": {
+        "title": "Možnosti Modbus SolarEdge",
+        "data": {
+          "scan_interval": "Frekvence dotazování (sekundy)",
+          "close_after_polling": "Zavřít připojení po dotazování",
+          "detect_meters": "Automatická detekce měřičů",
+          "detect_batteries": "Automatická detekce baterií",
+          "detect_extras": "Automatická detekce dalších entit",
+          "advanced_power_control": "Možnosti řízení výkonu",
+          "request_timeout": "Časový limit požadavku Modbus (sekundy)",
+          "sleep_after_write": "Zpoždění příkazu střídače (sekundy)"
         }
       }
     },

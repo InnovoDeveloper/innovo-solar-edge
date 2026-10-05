@@ -81,16 +81,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "Параметры Modbus SolarEdge",
-        "data": {
-          "scan_interval": "Частота опроса (секунды)",
-          "close_after_polling": "Закрывать соединение после опроса",
-          "detect_meters": "Автоопределение счётчиков",
-          "detect_batteries": "Автоопределение батарей",
-          "detect_extras": "Автоопределение дополнительных сущностей",
-          "advanced_power_control": "Параметры управления мощностью",
-          "request_timeout": "Тайм-аут запроса Modbus (секунды)",
-          "sleep_after_write": "Задержка команды инвертора (секунды)"
+        "title": "SolarEdge options",
+        "menu_options": {
+          "settings": "Integration settings",
+          "rate_plan": "Electricity rate plan"
         }
       },
       "adv_pwr_ctl": {
@@ -107,6 +101,19 @@
           "allow_battery_energy_reset": "Разрешить сброс энергии батареи",
           "battery_energy_reset_cycles": "Циклы обновления для сброса энергии батареи",
           "battery_rating_adjust": "Корректировка ёмкости батареи (проценты)"
+        }
+      },
+      "settings": {
+        "title": "Параметры Modbus SolarEdge",
+        "data": {
+          "scan_interval": "Частота опроса (секунды)",
+          "close_after_polling": "Закрывать соединение после опроса",
+          "detect_meters": "Автоопределение счётчиков",
+          "detect_batteries": "Автоопределение батарей",
+          "detect_extras": "Автоопределение дополнительных сущностей",
+          "advanced_power_control": "Параметры управления мощностью",
+          "request_timeout": "Тайм-аут запроса Modbus (секунды)",
+          "sleep_after_write": "Задержка команды инвертора (секунды)"
         }
       }
     },

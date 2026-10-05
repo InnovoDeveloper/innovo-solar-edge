@@ -20,7 +20,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 
 from .const import DOMAIN
-from .energy import CONF_PRICE_ENTITY, EnergyEntityMixin, EnergyModel
+from .energy import EnergyEntityMixin, EnergyModel
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ async def async_provision_energy(hass: HomeAssistant, entry: ConfigEntry, model:
     from homeassistant.components.energy.data import async_get_manager
 
     ent, energy = _resolver(hass, model)
-    price = entry.options.get(CONF_PRICE_ENTITY)
+    price, export_price = energy("price_now"), energy("export_price_now")
     sources: list[dict[str, Any]] = []
 
     meter = _grid_meter(model)
@@ -65,7 +65,7 @@ async def async_provision_energy(hass: HomeAssistant, entry: ConfigEntry, model:
             "entity_energy_price": price,
             "number_energy_price": None,
             "stat_compensation": None,
-            "entity_energy_price_export": price,
+            "entity_energy_price_export": export_price,
             "number_energy_price_export": None,
             "cost_adjustment_day": 0.0,
         }
@@ -169,6 +169,18 @@ def _dashboard_config(hass: HomeAssistant, model: EnergyModel, title: str) -> di
             ("solar_best_day", "Best day"),
             ("solar_best_day_date", "Best day date"),
             ("solar_lifetime_daily_average", "Lifetime daily average"),
+        ),
+        entities_card(
+            "Electricity rates",
+            ("tariff", "Rate plan"),
+            ("source", "Price from", "select"),
+            ("price_now", "Price now"),
+            ("price_period", "Period"),
+            ("next_price_change", "Next change"),
+            ("export_mode", "Export credit", "select"),
+            ("export_price_now", "Export price now"),
+            ("export_rate", "Export rate (fixed)", "number"),
+            ("override", "Price override (0 = off)", "number"),
         ),
         entities_card("System settings (edit to match the installation)", *settings),
         {"type": "history-graph", "title": "Last 24 hours", "hours_to_show": 24, "entities": graph},

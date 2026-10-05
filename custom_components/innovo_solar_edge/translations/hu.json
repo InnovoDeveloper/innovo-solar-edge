@@ -81,16 +81,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "SolarEdge Modbus Beállítások",
-        "data": {
-          "scan_interval": "Lekérdezési Gyakoriság (másodperc)",
-          "close_after_polling": "Kapcsolat Bezárása Lekérdezés Után",
-          "detect_meters": "Mérők Automatikus Felismerése",
-          "detect_batteries": "Akkumulátorok Automatikus Felismerése",
-          "detect_extras": "További Entitások Automatikus Felismerése",
-          "advanced_power_control": "Teljesítményvezérlési Beállítások",
-          "request_timeout": "Modbus Kérés Időtúllépése (másodperc)",
-          "sleep_after_write": "Inverter Parancs Késleltetése (másodperc)"
+        "title": "SolarEdge options",
+        "menu_options": {
+          "settings": "Integration settings",
+          "rate_plan": "Electricity rate plan"
         }
       },
       "adv_pwr_ctl": {
@@ -107,6 +101,19 @@
           "allow_battery_energy_reset": "Akkumulátor Energiájának Visszaállítása Engedélyezve",
           "battery_energy_reset_cycles": "Frissítési Ciklusok az Akkumulátor Energiájának Visszaállításához",
           "battery_rating_adjust": "Akkumulátor Kapacitásának Beállítása (százalék)"
+        }
+      },
+      "settings": {
+        "title": "SolarEdge Modbus Beállítások",
+        "data": {
+          "scan_interval": "Lekérdezési Gyakoriság (másodperc)",
+          "close_after_polling": "Kapcsolat Bezárása Lekérdezés Után",
+          "detect_meters": "Mérők Automatikus Felismerése",
+          "detect_batteries": "Akkumulátorok Automatikus Felismerése",
+          "detect_extras": "További Entitások Automatikus Felismerése",
+          "advanced_power_control": "Teljesítményvezérlési Beállítások",
+          "request_timeout": "Modbus Kérés Időtúllépése (másodperc)",
+          "sleep_after_write": "Inverter Parancs Késleltetése (másodperc)"
         }
       }
     },

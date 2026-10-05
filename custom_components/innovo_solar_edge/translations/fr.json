@@ -81,16 +81,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "Options SolarEdge Modbus",
-        "data": {
-          "scan_interval": "Fréquence de rafraichissement (en secondes)",
-          "close_after_polling": "Fermer la connexion après le rafraichissement",
-          "detect_meters": "Auto-détecter les capteurs",
-          "detect_batteries": "Auto-détecter les batteries",
-          "detect_extras": "Détection automatique des entités supplémentaires",
-          "advanced_power_control": "Options de contrôle de l'alimentation",
-          "request_timeout": "Délai d'expiration de la requête Modbus (en secondes)",
-          "sleep_after_write": "Délai de commande de l'onduleur (en secondes)"
+        "title": "SolarEdge options",
+        "menu_options": {
+          "settings": "Integration settings",
+          "rate_plan": "Electricity rate plan"
         }
       },
       "adv_pwr_ctl": {
@@ -107,6 +101,19 @@
           "allow_battery_energy_reset": "Autoriser la réinitialisation de la batterie",
           "battery_energy_reset_cycles": "Cycles de mise à jour pour réinitialiser l'énergie de la batterie",
           "battery_rating_adjust": "Ajustement de la capacité de la batterie (pourcentage)"
+        }
+      },
+      "settings": {
+        "title": "Options SolarEdge Modbus",
+        "data": {
+          "scan_interval": "Fréquence de rafraichissement (en secondes)",
+          "close_after_polling": "Fermer la connexion après le rafraichissement",
+          "detect_meters": "Auto-détecter les capteurs",
+          "detect_batteries": "Auto-détecter les batteries",
+          "detect_extras": "Détection automatique des entités supplémentaires",
+          "advanced_power_control": "Options de contrôle de l'alimentation",
+          "request_timeout": "Délai d'expiration de la requête Modbus (en secondes)",
+          "sleep_after_write": "Délai de commande de l'onduleur (en secondes)"
         }
       }
     },

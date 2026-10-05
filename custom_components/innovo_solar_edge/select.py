@@ -54,6 +54,11 @@ async def async_setup_entry(
                 SolarEdgeReactivePowerMode(inverter, config_entry, coordinator)
             )
 
+    # Innovo: rate plan source and export credit
+    from .energy import energy_selects
+
+    entities.extend(energy_selects(hass, config_entry))
+
     if entities:
         async_add_entities(entities)
 

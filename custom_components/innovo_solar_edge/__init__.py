@@ -121,10 +121,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["yaml"] = config.get(DOMAIN, {})
 
-    async def provision_dashboards(call: ServiceCall) -> None:
-        """Build the Energy dashboard and the Solar & Energy dashboard."""
-        from .provision import DEFAULT_TITLE, DEFAULT_URL_PATH, async_provision
-
+    def loaded_entry(call: ServiceCall) -> ConfigEntry:
         loaded = [
             e for e in hass.config_entries.async_entries(DOMAIN)
             if e.state is ConfigEntryState.LOADED
@@ -132,14 +129,56 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         ]
         if not loaded:
             raise HomeAssistantError("No loaded Innovo Solar Edge entry found")
+        return loaded[0]
+
+    def energy_model(call: ServiceCall):
+        model = hass.data[DOMAIN][loaded_entry(call).entry_id].get("energy")
+        if model is None:
+            raise HomeAssistantError("This entry has no energy model (no inverter)")
+        return model
+
+    async def provision_dashboards(call: ServiceCall) -> None:
+        """Build the Energy dashboard and the Solar & Energy dashboard."""
+        from .provision import DEFAULT_TITLE, DEFAULT_URL_PATH, async_provision
+
         await async_provision(
             hass,
-            loaded[0],
+            loaded_entry(call),
             energy_dashboard=call.data.get("energy_dashboard", True),
             dashboard=call.data.get("dashboard", True),
             url_path=call.data.get("url_path", DEFAULT_URL_PATH),
             title=call.data.get("title", DEFAULT_TITLE),
         )
+
+    async def set_tariff(call: ServiceCall) -> None:
+        """Replace the rate plan (JSON) - used by home-control platforms."""
+        energy_model(call).tariff.set_plan(dict(call.data["plan"]))
+
+    async def set_tariff_rates(call: ServiceCall) -> None:
+        """Change prices in the current plan by period name."""
+        rates = {str(k): float(v) for k, v in dict(call.data["rates"]).items()}
+        energy_model(call).tariff.set_rates(rates, call.data.get("season"))
+
+    hass.services.async_register(
+        DOMAIN,
+        "set_tariff",
+        set_tariff,
+        schema=vol.Schema(
+            {vol.Optional("config_entry_id"): cv.string, vol.Required("plan"): dict}
+        ),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "set_tariff_rates",
+        set_tariff_rates,
+        schema=vol.Schema(
+            {
+                vol.Optional("config_entry_id"): cv.string,
+                vol.Required("rates"): dict,
+                vol.Optional("season"): cv.string,
+            }
+        ),
+    )
 
     hass.services.async_register(
         DOMAIN,

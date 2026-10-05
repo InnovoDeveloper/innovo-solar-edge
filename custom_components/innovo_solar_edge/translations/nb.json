@@ -81,16 +81,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "SolarEdge Modbus-alternativer",
-        "data": {
-          "scan_interval": "Avstemningsfrekvens (sekunder)",
-          "close_after_polling": "Lukk tilkoblingen etter avstemning",
-          "detect_meters": "Automatisk oppdagelse av målere",
-          "detect_batteries": "Automatisk gjenkjenning av batterier",
-          "detect_extras": "Automatisk oppdage flere enheter",
-          "advanced_power_control": "Strømkontrollalternativer",
-          "request_timeout": "Tidsavbrudd for Modbus-forespørsel (sekunder)",
-          "sleep_after_write": "Inverter Command Delay (sekunder)"
+        "title": "SolarEdge options",
+        "menu_options": {
+          "settings": "Integration settings",
+          "rate_plan": "Electricity rate plan"
         }
       },
       "adv_pwr_ctl": {
@@ -107,6 +101,19 @@
           "allow_battery_energy_reset": "La batterienergien tilbakestilles",
           "battery_energy_reset_cycles": "Oppdater sykluser for å tilbakestille batterienergi",
           "battery_rating_adjust": "Justering av batterikapasitet (prosent)"
+        }
+      },
+      "settings": {
+        "title": "SolarEdge Modbus-alternativer",
+        "data": {
+          "scan_interval": "Avstemningsfrekvens (sekunder)",
+          "close_after_polling": "Lukk tilkoblingen etter avstemning",
+          "detect_meters": "Automatisk oppdagelse av målere",
+          "detect_batteries": "Automatisk gjenkjenning av batterier",
+          "detect_extras": "Automatisk oppdage flere enheter",
+          "advanced_power_control": "Strømkontrollalternativer",
+          "request_timeout": "Tidsavbrudd for Modbus-forespørsel (sekunder)",
+          "sleep_after_write": "Inverter Command Delay (sekunder)"
         }
       }
     },

@@ -81,16 +81,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "SolarEdge Modbus Instellingen",
-        "data": {
-          "scan_interval": "Oproepfrequentie (seconden)",
-          "close_after_polling": "Verbinding sluiten na oproep",
-          "detect_meters": "Meters automatisch detecteren",
-          "detect_batteries": "Batterijen automatisch detecteren",
-          "detect_extras": "Automatische detectie van aanvullende entiteiten",
-          "advanced_power_control": "Opties voor vermogensregeling",
-          "request_timeout": "Time-out voor Modbus-aanvraag (seconden)",
-          "sleep_after_write": "Omvormer commando vertraging (seconden)"
+        "title": "SolarEdge options",
+        "menu_options": {
+          "settings": "Integration settings",
+          "rate_plan": "Electricity rate plan"
         }
       },
       "adv_pwr_ctl": {
@@ -107,6 +101,19 @@
           "allow_battery_energy_reset": "Batterij-energie laten resetten",
           "battery_energy_reset_cycles": "Update cycli om de batterij-energie te resetten",
           "battery_rating_adjust": "Aanpassing batterijvermogen (%)"
+        }
+      },
+      "settings": {
+        "title": "SolarEdge Modbus Instellingen",
+        "data": {
+          "scan_interval": "Oproepfrequentie (seconden)",
+          "close_after_polling": "Verbinding sluiten na oproep",
+          "detect_meters": "Meters automatisch detecteren",
+          "detect_batteries": "Batterijen automatisch detecteren",
+          "detect_extras": "Automatische detectie van aanvullende entiteiten",
+          "advanced_power_control": "Opties voor vermogensregeling",
+          "request_timeout": "Time-out voor Modbus-aanvraag (seconden)",
+          "sleep_after_write": "Omvormer commando vertraging (seconden)"
         }
       }
     },

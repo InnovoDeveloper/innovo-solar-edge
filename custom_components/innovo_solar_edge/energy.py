@@ -146,7 +146,26 @@ class EnergyModel:
             "last_today": stored.get("last_today"),
             "history": stored.get("history", []),
             "typical": stored.get("typical") or {"per_kw": None, "source": None, "params": None},
+            "month": stored.get("month"),
+            "tariff": stored.get("tariff"),
         }
+        from .tariff import SRC_PLAN, SRC_SENSOR, TariffManager
+
+        default_source = SRC_SENSOR if self.entry.options.get(CONF_PRICE_ENTITY) else SRC_PLAN
+        self.tariff = TariffManager(self, default_source)
+
+    @property
+    def signal(self) -> str:
+        return signal_update(self.entry.entry_id)
+
+    @callback
+    def save_soon(self) -> None:
+        self._store.async_delay_save(lambda: self.data, 5)
+
+    @callback
+    def recompute(self) -> None:
+        """Re-run the update with the latest readings (after a settings change)."""
+        self._update(publish=False)
 
     def _nameplate_kwh(self) -> float | None:
         for battery in [*self.hub.batteries, *self.hub.der_batteries]:
@@ -268,7 +287,7 @@ class EnergyModel:
         self.hass.loop.call_soon(self._update)
 
     @callback
-    def _update(self) -> None:
+    def _update(self, publish: bool = True) -> None:
         try:
             raw = self._read()
             self._compute_live(raw)
@@ -279,7 +298,8 @@ class EnergyModel:
             _LOGGER.exception("Energy model update failed")
             return
         self._save_later()
-        async_dispatcher_send(self.hass, signal_update(self.entry.entry_id))
+        if publish:
+            async_dispatcher_send(self.hass, signal_update(self.entry.entry_id))
 
     def _sun_up(self, inv_w: float | None) -> bool:
         sun = self.hass.states.get("sun.sun")
@@ -349,8 +369,6 @@ class EnergyModel:
         else:
             v["inverter_status"] = status.replace("I_STATUS_", "").title()
 
-        v["price"] = raw["price"]
-        v["period"] = raw["period"]
 
     def _accumulate(self, raw: dict[str, Any]) -> None:
         """Battery in/out from SoE deltas; PV = inverter AC delta + stored delta."""
@@ -410,20 +428,31 @@ class EnergyModel:
                 return None
             return max(cur[key] - start[key], 0)
 
+        t = {k: delta(k) for k in cur}
+        v = self.values
+
+        # Month-to-date grid import, for tiered rate plans.
+        month_key = today[:7]
+        month = self.data.get("month") or {}
+        if month.get("month") != month_key or month.get("start") is None:
+            month = self.data["month"] = {"month": month_key, "start": cur["import"]}
+        usage_month = None if cur["import"] is None or month["start"] is None else max(cur["import"] - month["start"], 0)
+
+        rate = self.tariff.current(raw["price"], raw["period"], t["import"], usage_month)
+        v["price"], v["period"], v["tier"] = rate["price"], rate["period"], rate["tier"]
+        v["export_price"], v["next_price"] = rate["export"], rate["next"]
+
         last = self.data["last"]
-        price = raw["price"]
-        for key, field in (("import", "cost"), ("export", "credit")):
+        for key, field, price in (("import", "cost", rate["price"]), ("export", "credit", rate["export"])):
             prev = last.get(f"{key}_kwh")
             if cur[key] is not None:
                 if price is not None and prev is not None and 0 <= cur[key] - prev < 50:
                     day[field] += (cur[key] - prev) * price
                 last[f"{key}_kwh"] = cur[key]
 
-        t = {k: delta(k) for k in cur}
         house = None
         if None not in t.values():
             house = max(t["import"] - t["export"] + t["solar"] - t["charged"] + t["discharged"], 0)
-        v = self.values
         v["today"] = t
         v["house_today"] = house
         v["self_sufficiency_today"] = (
@@ -564,7 +593,8 @@ SENSORS = [
     ("grid_state", "energy_grid_state", "Grid State", None, None, None, "mdi:transmission-tower", lambda m: m.values.get("grid_state")),
     ("solar_share_now", "energy_solar_share_now", "Solar Share Now", PCT, None, MEAS, "mdi:solar-power-variant", lambda m: m.values.get("solar_share_now")),
     ("inverter_status", "energy_inverter_status", "Inverter Status", None, None, None, "mdi:solar-panel", lambda m: m.values.get("inverter_status")),
-    ("price_now", "energy_price_now", "Price Now", "USD/kWh", None, MEAS, "mdi:currency-usd", lambda m: m.values.get("price")),
+    ("price_now", "energy_price_now", "Price Now", "CUR/kWh", None, MEAS, "mdi:currency-usd", lambda m: m.values.get("price")),
+    ("export_price_now", "energy_export_price_now", "Export Price Now", "CUR/kWh", None, MEAS, "mdi:cash-plus", lambda m: m.values.get("export_price")),
     ("price_period", "energy_price_period", "Price Period", None, None, None, "mdi:clock-time-four-outline", lambda m: m.values.get("period")),
     # running totals (continue the statistics of the former template sensors)
     ("solar_production", "solar_pv_production_energy", "Solar Production", KWH, ENERGY, TOTAL_INC, "mdi:solar-power", lambda m: round(m.data["acc"]["solar"], 3)),
@@ -578,7 +608,7 @@ SENSORS = [
     ("battery_charged_today", "energy_battery_charged_today", "Battery Charged Today", KWH, ENERGY, None, "mdi:battery-arrow-up", _today("charged")),
     ("battery_discharged_today", "energy_battery_discharged_today", "Battery Discharged Today", KWH, ENERGY, None, "mdi:battery-arrow-down", _today("discharged")),
     ("self_sufficiency_today", "energy_self_sufficiency_today", "Self Sufficiency Today", PCT, None, MEAS, "mdi:leaf", lambda m: m.values.get("self_sufficiency_today")),
-    ("grid_cost_today", "energy_grid_cost_today", "Grid Cost Today", "USD", MONEY, None, "mdi:currency-usd", lambda m: m.values.get("cost_today")),
+    ("grid_cost_today", "energy_grid_cost_today", "Grid Cost Today", "CUR", MONEY, None, "mdi:currency-usd", lambda m: m.values.get("cost_today")),
     # performance
     ("solar_array_size", "energy_solar_array_size", "Solar Array Size", "kW", None, None, "mdi:solar-panel-large", lambda m: m.values.get("array_kw")),
     ("solar_typical_today", "energy_solar_typical_today", "Solar Typical Today", KWH, None, None, "mdi:weather-sunny", lambda m: m.values.get("typical_today")),
@@ -601,7 +631,8 @@ ATTRIBUTES: dict[str, Callable[[EnergyModel], dict[str, Any]]] = {
     "grid_power": lambda m: {"sign": "+ importing, - exporting"},
     "battery_power": lambda m: {"sign": "+ charging, - discharging", "estimated": True},
     "solar_power": lambda m: {"estimated": True},
-    "grid_cost_today": lambda m: {"export_credit_rate": "same as import price (legacy NEM)"},
+    "grid_cost_today": lambda m: {"export_credit": m.tariff.state.get("export_mode")},
+    "price_now": lambda m: {"tier": m.values.get("tier"), "source": m.tariff.state.get("source")},
     "solar_typical_today": lambda m: {"source": m.data["typical"].get("source")},
     "solar_health_trend": lambda m: {"change_pct": m.values.get("trend_pct")},
     "solar_cleaning_recommended": lambda m: {"rule": "Yes when clear-day output is >10% below this system's season-adjusted best"},
@@ -636,6 +667,8 @@ class EnergySensor(EnergyEntityMixin, SensorEntity):
         self._key = key
         self._value_fn = value_fn
         self._attr_name = name
+        if unit and "CUR" in unit:
+            unit = unit.replace("CUR", model.hass.config.currency)
         self._attr_native_unit_of_measurement = unit
         self._attr_device_class = device_class
         self._attr_state_class = state_class
@@ -711,13 +744,28 @@ def _model(hass: HomeAssistant, entry: ConfigEntry) -> EnergyModel | None:
 
 
 def energy_sensors(hass: HomeAssistant, entry: ConfigEntry) -> list[SensorEntity]:
+    from .tariff import tariff_sensors
+
     model = _model(hass, entry)
-    return [EnergySensor(model, *spec) for spec in SENSORS] if model else []
+    if not model:
+        return []
+    return [EnergySensor(model, *spec) for spec in SENSORS] + tariff_sensors(model)
 
 
 def energy_numbers(hass: HomeAssistant, entry: ConfigEntry) -> list[NumberEntity]:
+    from .tariff import tariff_numbers
+
     model = _model(hass, entry)
-    return [EnergyNumber(model, *spec) for spec in NUMBERS] if model else []
+    if not model:
+        return []
+    return [EnergyNumber(model, *spec) for spec in NUMBERS] + tariff_numbers(model)
+
+
+def energy_selects(hass: HomeAssistant, entry: ConfigEntry) -> list:
+    from .tariff import tariff_selects
+
+    model = _model(hass, entry)
+    return tariff_selects(model) if model else []
 
 
 def energy_dates(hass: HomeAssistant, entry: ConfigEntry) -> list[DateEntity]:

@@ -81,16 +81,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "SolarEdge Modbus -valinnat",
-        "data": {
-          "scan_interval": "Kyselytaajuus (sekuntia)",
-          "close_after_polling": "Sulje yhteys kyselyn jälkeen",
-          "detect_meters": "Mittareiden automaattinen tunnistus",
-          "detect_batteries": "Akkujen automaattinen tunnistus",
-          "detect_extras": "Lisäentiteettien automaattinen tunnistus",
-          "advanced_power_control": "Tehonhallinnan valinnat",
-          "request_timeout": "Modbus-pyynnön aikakatkaisu (sekuntia)",
-          "sleep_after_write": "Vaihtosuuntaajan komennon viive (sekuntia)"
+        "title": "SolarEdge options",
+        "menu_options": {
+          "settings": "Integration settings",
+          "rate_plan": "Electricity rate plan"
         }
       },
       "adv_pwr_ctl": {
@@ -107,6 +101,19 @@
           "allow_battery_energy_reset": "Salli akun energian nollaus",
           "battery_energy_reset_cycles": "Päivityssyklit akun energian nollaamiseksi",
           "battery_rating_adjust": "Akun kapasiteetin säätö (prosenttia)"
+        }
+      },
+      "settings": {
+        "title": "SolarEdge Modbus -valinnat",
+        "data": {
+          "scan_interval": "Kyselytaajuus (sekuntia)",
+          "close_after_polling": "Sulje yhteys kyselyn jälkeen",
+          "detect_meters": "Mittareiden automaattinen tunnistus",
+          "detect_batteries": "Akkujen automaattinen tunnistus",
+          "detect_extras": "Lisäentiteettien automaattinen tunnistus",
+          "advanced_power_control": "Tehonhallinnan valinnat",
+          "request_timeout": "Modbus-pyynnön aikakatkaisu (sekuntia)",
+          "sleep_after_write": "Vaihtosuuntaajan komennon viive (sekuntia)"
         }
       }
     },

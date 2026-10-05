@@ -78,6 +78,56 @@ entity by its unique id suffix (`<inverter>_energy_<key>`) on the
 "Learning" means fewer than 10 days of history (health trend: until there are
 prior weeks to compare).
 
+### Electricity rates
+
+| Entity | Meaning |
+|---|---|
+| `sensor.energy_price_now` | Import price now ($/kWh); attribute `tier` for tiered plans |
+| `sensor.energy_export_price_now` | Export credit now ($/kWh) |
+| `sensor.energy_price_period` | Period name from the plan (e.g. `On-peak`) or `Override` |
+| `sensor.energy_next_price_change` | Timestamp of the next change; attributes `next_price`, `next_period` |
+| `sensor.energy_tariff` | Plan name (attributes: seasons, currency, source, export credit) |
+| `select.energy_tariff_source` | `Rate plan` or `Price sensor` (the sensor chosen in the options) |
+| `select.energy_export_credit` | `Same as import` / `Fixed rate` / `No credit` |
+| `number.energy_export_rate` | Fixed export rate |
+| `number.energy_price_override` | Price override; anything above 0 wins over everything else, 0 turns it off |
+
+Set a whole plan:
+
+```
+POST /api/services/innovo_solar_edge/set_tariff
+{"plan": {
+  "name": "TOU 4-9", "currency": "USD", "tier_period": "month",
+  "seasons": [
+    {"name": "Summer", "months": [6, 7, 8, 9],
+     "weekday": [["00:00", 0.40, "Off-peak"], ["16:00", 0.64, "On-peak"], ["21:00", 0.40, "Off-peak"]],
+     "weekend": [["00:00", 0.40, "Off-peak"], ["16:00", 0.52, "Mid-peak"], ["21:00", 0.40, "Off-peak"]]},
+    {"name": "Winter", "months": [1, 2, 3, 4, 5, 10, 11, 12],
+     "weekday": [["00:00", 0.38, "Off-peak"], ["08:00", 0.34, "Super off-peak"],
+                 ["16:00", 0.50, "Mid-peak"], ["21:00", 0.38, "Off-peak"]]}
+  ]}}
+```
+
+Rows start at a time and run until the next row; each day starts at `00:00`;
+seasons must cover all 12 months; a missing `weekend` reuses the weekday rows.
+A rate can be tiered: `[{"upto": 40, "rate": 0.07065}, {"rate": 0.11142}]`, where
+`upto` counts kWh of grid import per `tier_period` (`day` or calendar `month`).
+Holidays are treated as normal days.
+
+Change prices by period name (e.g. after a rate change):
+
+```
+POST /api/services/innovo_solar_edge/set_tariff_rates
+{"rates": {"On-peak": 0.66, "Off-peak": 0.41}, "season": "Summer"}
+```
+
+Temporary override (e.g. a critical-peak event), then clear it:
+
+```
+POST /api/services/number/set_value {"entity_id": "number.energy_price_override", "value": 1.20}
+POST /api/services/number/set_value {"entity_id": "number.energy_price_override", "value": 0}
+```
+
 ### Running totals (kWh, never reset)
 
 `sensor.solar_pv_production_energy`, `sensor.battery_charged_energy`,

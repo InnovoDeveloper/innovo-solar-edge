@@ -81,18 +81,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "SolarEdge Modbus Options",
-        "data": {
-          "scan_interval": "Polling Frequency (seconds)",
-          "close_after_polling": "Close Connection After Polling",
-          "detect_meters": "Auto-Detect Meters",
-          "detect_batteries": "Auto-Detect Batteries",
-          "detect_extras": "Auto-Detect Additional Entities",
-          "advanced_power_control": "Power Control Options",
-          "request_timeout": "Modbus Request Timeout (seconds)",
-          "sleep_after_write": "Inverter Command Delay (seconds)",
-          "energy_price_entity": "Electricity price sensor ($/kWh) for daily cost",
-          "energy_typical_lookup": "Look up typical solar output from NREL PVWatts (sends approximate home location)"
+        "title": "SolarEdge options",
+        "menu_options": {
+          "settings": "Integration settings",
+          "rate_plan": "Electricity rate plan"
         }
       },
       "adv_pwr_ctl": {
@@ -110,13 +102,48 @@
           "battery_energy_reset_cycles": "Update Cycles to Reset Battery Energy",
           "battery_rating_adjust": "Battery Rating Adjustment (percent)"
         }
+      },
+      "settings": {
+        "title": "SolarEdge Modbus Options",
+        "data": {
+          "scan_interval": "Polling Frequency (seconds)",
+          "close_after_polling": "Close Connection After Polling",
+          "detect_meters": "Auto-Detect Meters",
+          "detect_batteries": "Auto-Detect Batteries",
+          "detect_extras": "Auto-Detect Additional Entities",
+          "advanced_power_control": "Power Control Options",
+          "request_timeout": "Modbus Request Timeout (seconds)",
+          "sleep_after_write": "Inverter Command Delay (seconds)",
+          "energy_price_entity": "Electricity price sensor ($/kWh) for daily cost",
+          "energy_typical_lookup": "Look up typical solar output from NREL PVWatts (sends approximate home location)"
+        }
+      },
+      "rate_plan": {
+        "title": "Electricity rate plan",
+        "description": "Time-of-use prices for this site. Write one row per line as `HH:MM price name`, e.g. `16:00 0.64 On-peak`; each row lasts until the next and every day must start at 00:00. Months: `6-9` or `1,2,3`. Leave the weekend box empty to reuse weekday rows, and leave season 2 empty for a single all-year season. Tiered plans and more seasons can be set over the API (innovo_solar_edge.set_tariff). {error}",
+        "data": {
+          "name": "Plan name",
+          "currency": "Currency",
+          "season1_name": "Season 1 name",
+          "season1_months": "Season 1 months",
+          "season1_weekday": "Season 1 weekday rows",
+          "season1_weekend": "Season 1 weekend rows",
+          "season2_name": "Season 2 name",
+          "season2_months": "Season 2 months",
+          "season2_weekday": "Season 2 weekday rows",
+          "season2_weekend": "Season 2 weekend rows"
+        }
       }
     },
     "error": {
       "invalid_scan_interval": "Valid interval is 1 to 86400 seconds.",
       "invalid_request_timeout": "Valid interval is 1 to 60 seconds.",
       "invalid_sleep_interval": "Valid interval is 0 to 60 seconds.",
-      "invalid_percent": "Valid range is 0 to 100 percent."
+      "invalid_percent": "Valid range is 0 to 100 percent.",
+      "invalid_plan": "Rate plan not saved: {error}"
+    },
+    "abort": {
+      "energy_not_loaded": "The integration must be running to edit the rate plan."
     }
   },
   "issues": {
@@ -209,6 +236,38 @@
         "title": {
           "name": "Dashboard title",
           "description": "Title of the dashboard (default: Solar & Energy)."
+        }
+      }
+    },
+    "set_tariff": {
+      "name": "Set rate plan",
+      "description": "Replace the electricity rate plan with a JSON plan (seasons with time rows; see docs/CONTROLLERS.md).",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "Integration entry (default: the first one)."
+        },
+        "plan": {
+          "name": "Plan",
+          "description": "Plan object with name, currency, tier_period and seasons."
+        }
+      }
+    },
+    "set_tariff_rates": {
+      "name": "Set rates by period name",
+      "description": "Change prices in the current plan by period name, e.g. {\"On-peak\": 0.64}.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "Integration entry (default: the first one)."
+        },
+        "rates": {
+          "name": "Rates",
+          "description": "Mapping of period name to price per kWh."
+        },
+        "season": {
+          "name": "Season",
+          "description": "Only change this season (default: all seasons)."
         }
       }
     }

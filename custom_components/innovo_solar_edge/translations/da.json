@@ -81,16 +81,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "SolarEdge Modbus-indstillinger",
-        "data": {
-          "scan_interval": "Pollingfrekvens (sekunder)",
-          "close_after_polling": "Luk forbindelsen efter polling",
-          "detect_meters": "Automatisk registrering af målere",
-          "detect_batteries": "Automatisk registrering af batterier",
-          "detect_extras": "Automatisk registrering af yderligere enheder",
-          "advanced_power_control": "Effektstyringsindstillinger",
-          "request_timeout": "Modbus-forespørgselstimeout (sekunder)",
-          "sleep_after_write": "Forsinkelse for inverterkommando (sekunder)"
+        "title": "SolarEdge options",
+        "menu_options": {
+          "settings": "Integration settings",
+          "rate_plan": "Electricity rate plan"
         }
       },
       "adv_pwr_ctl": {
@@ -107,6 +101,19 @@
           "allow_battery_energy_reset": "Tillad nulstilling af batterienergi",
           "battery_energy_reset_cycles": "Opdateringscyklusser til nulstilling af batterienergi",
           "battery_rating_adjust": "Justering af batterikapacitet (procent)"
+        }
+      },
+      "settings": {
+        "title": "SolarEdge Modbus-indstillinger",
+        "data": {
+          "scan_interval": "Pollingfrekvens (sekunder)",
+          "close_after_polling": "Luk forbindelsen efter polling",
+          "detect_meters": "Automatisk registrering af målere",
+          "detect_batteries": "Automatisk registrering af batterier",
+          "detect_extras": "Automatisk registrering af yderligere enheder",
+          "advanced_power_control": "Effektstyringsindstillinger",
+          "request_timeout": "Modbus-forespørgselstimeout (sekunder)",
+          "sleep_after_write": "Forsinkelse for inverterkommando (sekunder)"
         }
       }
     },

@@ -32,6 +32,12 @@ All inverter, meter and battery entities of the upstream integration, plus a
   date.
 - **Provisioning**: one action builds the HA Energy dashboard and a
   *Solar & Energy* dashboard from the site's own entities.
+- **Electricity rate plan**: time-of-use prices with seasons, weekday/weekend
+  rows and optional tiers, edited in the UI (Configure → *Electricity rate
+  plan*) or over the API; or take the price from any existing price sensor
+  (e.g. a utility-rate integration or a template). A price override and the
+  export credit (same as import / fixed / none) are entities, so a controller can
+  set them directly.
 
 Battery and solar power are estimates when the battery only reports state of
 energy (common with third-party batteries): battery power is the SoE slope over
@@ -61,14 +67,18 @@ Manual install: copy `custom_components/innovo_solar_edge` into the HA config's
    - turn on **Detect batteries** if the site has a battery;
    - leave **Auto-Detect Additional Entities** off unless power-control
      registers are needed (many inverters time out on them);
-   - optional: **Electricity price sensor** ($/kWh) for daily cost;
+   - optional: **Electricity price sensor** ($/kWh), if prices come from another integration;
    - optional: turn off the **PVWatts lookup** if the home location must not be
      sent to NREL (typical/spec metrics are then unavailable).
    A 10–15 s polling interval gives a near-live feed.
-2. On the **SolarEdge Energy** device, set *Solar Panel Count* and *Solar Panel
+2. Enter the utility rate plan: Configure → **Electricity rate plan**, one row
+   per line as `HH:MM price name` (e.g. `16:00 0.64 On-peak`), up to two seasons
+   with months like `6-9`. Or send a JSON plan with `innovo_solar_edge.set_tariff`
+   (see the controller reference), or set *Tariff Source* to *Price sensor*.
+3. On the **SolarEdge Energy** device, set *Solar Panel Count* and *Solar Panel
    Watts* (a repair notice reminds you until they're set), and optionally tilt,
    azimuth and the commissioning date.
-3. Press **Provision Dashboards** on the same device, or call the action:
+4. Press **Provision Dashboards** on the same device, or call the action:
 
    ```yaml
    action: innovo_solar_edge.provision_dashboards

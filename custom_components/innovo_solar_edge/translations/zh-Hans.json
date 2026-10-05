@@ -81,16 +81,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "SolarEdge Modbus 选项",
-        "data": {
-          "scan_interval": "轮询频率（秒）",
-          "close_after_polling": "轮询后关闭连接",
-          "detect_meters": "自动检测电表",
-          "detect_batteries": "自动检测电池",
-          "detect_extras": "自动检测其他实体",
-          "advanced_power_control": "功率控制选项",
-          "request_timeout": "Modbus 请求超时（秒）",
-          "sleep_after_write": "逆变器命令延迟（秒）"
+        "title": "SolarEdge options",
+        "menu_options": {
+          "settings": "Integration settings",
+          "rate_plan": "Electricity rate plan"
         }
       },
       "adv_pwr_ctl": {
@@ -107,6 +101,19 @@
           "allow_battery_energy_reset": "允许重置电池能量",
           "battery_energy_reset_cycles": "重置电池能量的更新周期数",
           "battery_rating_adjust": "电池容量调整（百分比）"
+        }
+      },
+      "settings": {
+        "title": "SolarEdge Modbus 选项",
+        "data": {
+          "scan_interval": "轮询频率（秒）",
+          "close_after_polling": "轮询后关闭连接",
+          "detect_meters": "自动检测电表",
+          "detect_batteries": "自动检测电池",
+          "detect_extras": "自动检测其他实体",
+          "advanced_power_control": "功率控制选项",
+          "request_timeout": "Modbus 请求超时（秒）",
+          "sleep_after_write": "逆变器命令延迟（秒）"
         }
       }
     },

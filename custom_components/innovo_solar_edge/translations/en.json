@@ -81,18 +81,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "SolarEdge Modbus Options",
-        "data": {
-          "scan_interval": "Polling Frequency (seconds)",
-          "close_after_polling": "Close Connection After Polling",
-          "detect_meters": "Auto-Detect Meters",
-          "detect_batteries": "Auto-Detect Batteries",
-          "detect_extras": "Auto-Detect Additional Entities",
-          "advanced_power_control": "Power Control Options",
-          "request_timeout": "Modbus Request Timeout (seconds)",
-          "sleep_after_write": "Inverter Command Delay (seconds)",
-          "energy_price_entity": "Electricity price sensor ($/kWh) for daily cost",
-          "energy_typical_lookup": "Look up typical solar output from NREL PVWatts (sends approximate home location)"
+        "title": "SolarEdge options",
+        "menu_options": {
+          "settings": "Integration settings",
+          "rate_plan": "Electricity rate plan"
         }
       },
       "adv_pwr_ctl": {
@@ -109,6 +101,21 @@
           "allow_battery_energy_reset": "Allow Battery Energy to Reset",
           "battery_energy_reset_cycles": "Update Cycles to Reset Battery Energy",
           "battery_rating_adjust": "Battery Rating Adjustment (percent)"
+        }
+      },
+      "settings": {
+        "title": "SolarEdge Modbus Options",
+        "data": {
+          "scan_interval": "Polling Frequency (seconds)",
+          "close_after_polling": "Close Connection After Polling",
+          "detect_meters": "Auto-Detect Meters",
+          "detect_batteries": "Auto-Detect Batteries",
+          "detect_extras": "Auto-Detect Additional Entities",
+          "advanced_power_control": "Power Control Options",
+          "request_timeout": "Modbus Request Timeout (seconds)",
+          "sleep_after_write": "Inverter Command Delay (seconds)",
+          "energy_price_entity": "Electricity price sensor ($/kWh) for daily cost",
+          "energy_typical_lookup": "Look up typical solar output from NREL PVWatts (sends approximate home location)"
         }
       }
     },

@@ -20,3 +20,28 @@ provision_dashboards:
       example: Solar & Energy
       selector:
         text:
+set_tariff:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: innovo_solar_edge
+    plan:
+      required: true
+      selector:
+        object:
+set_tariff_rates:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: innovo_solar_edge
+    rates:
+      required: true
+      example: '{"On-peak": 0.64, "Off-peak": 0.40}'
+      selector:
+        object:
+    season:
+      example: Summer
+      selector:
+        text:

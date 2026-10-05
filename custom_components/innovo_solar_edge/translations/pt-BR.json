@@ -81,16 +81,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "Opções do Modbus SolarEdge",
-        "data": {
-          "scan_interval": "Frequência de Sondagem (segundos)",
-          "close_after_polling": "Fechar Conexão Após Sondagem",
-          "detect_meters": "Detecção Automática de Medidores",
-          "detect_batteries": "Detecção Automática de Baterias",
-          "detect_extras": "Detecção Automática de Entidades Adicionais",
-          "advanced_power_control": "Opções de Controle de Energia",
-          "request_timeout": "Tempo Limite de Solicitação Modbus (segundos)",
-          "sleep_after_write": "Atraso de Comando do Inversor (segundos)"
+        "title": "SolarEdge options",
+        "menu_options": {
+          "settings": "Integration settings",
+          "rate_plan": "Electricity rate plan"
         }
       },
       "adv_pwr_ctl": {
@@ -107,6 +101,19 @@
           "allow_battery_energy_reset": "Permitir Redefinição da Energia da Bateria",
           "battery_energy_reset_cycles": "Ciclos de Atualização para Redefinir a Energia da Bateria",
           "battery_rating_adjust": "Ajuste de Capacidade da Bateria (porcentagem)"
+        }
+      },
+      "settings": {
+        "title": "Opções do Modbus SolarEdge",
+        "data": {
+          "scan_interval": "Frequência de Sondagem (segundos)",
+          "close_after_polling": "Fechar Conexão Após Sondagem",
+          "detect_meters": "Detecção Automática de Medidores",
+          "detect_batteries": "Detecção Automática de Baterias",
+          "detect_extras": "Detecção Automática de Entidades Adicionais",
+          "advanced_power_control": "Opções de Controle de Energia",
+          "request_timeout": "Tempo Limite de Solicitação Modbus (segundos)",
+          "sleep_after_write": "Atraso de Comando do Inversor (segundos)"
         }
       }
     },

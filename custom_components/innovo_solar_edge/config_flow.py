@@ -600,7 +600,92 @@ class SolaredgeModbusMultiOptionsFlowHandler(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle the initial options flow step."""
+        """Options menu: integration settings or the electricity rate plan."""
+        return self.async_show_menu(step_id="init", menu_options=["settings", "rate_plan"])
+
+    async def async_step_rate_plan(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Edit the manual time-of-use rate plan (Innovo energy model)."""
+        from .tariff import format_months, format_rows, parse_months, parse_rows
+
+        entry_data = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id, {})
+        model = entry_data.get("energy") if isinstance(entry_data, dict) else None
+        if model is None:
+            return self.async_abort(reason="energy_not_loaded")
+
+        errors: dict[str, str] = {}
+        placeholders = {"error": ""}
+        if user_input is not None:
+            try:
+                seasons = []
+                for n in (1, 2):
+                    months = (user_input.get(f"season{n}_months") or "").strip()
+                    weekday = (user_input.get(f"season{n}_weekday") or "").strip()
+                    if not months and not weekday:
+                        continue
+                    season = {
+                        "name": user_input.get(f"season{n}_name") or f"Season {n}",
+                        "months": parse_months(months) if months else list(range(1, 13)),
+                        "weekday": parse_rows(weekday),
+                    }
+                    weekend = parse_rows(user_input.get(f"season{n}_weekend") or "")
+                    if weekend:
+                        season["weekend"] = weekend
+                    seasons.append(season)
+                model.tariff.set_plan(
+                    {
+                        "name": user_input.get("name") or "Rate plan",
+                        "currency": user_input.get("currency") or self.hass.config.currency,
+                        "tier_period": "month",
+                        "seasons": seasons,
+                    }
+                )
+                return self.async_create_entry(title="", data=dict(self.config_entry.options))
+            except (HomeAssistantError, ValueError) as err:
+                errors["base"] = "invalid_plan"
+                placeholders["error"] = str(err)
+
+        plan = model.tariff.plan or {}
+        seasons = plan.get("seasons") or []
+
+        def season_value(n: int, key: str) -> str:
+            if user_input is not None:
+                return user_input.get(f"season{n}_{key}") or ""
+            if len(seasons) < n:
+                return ""
+            season = seasons[n - 1]
+            if key == "name":
+                return season.get("name") or ""
+            if key == "months":
+                return format_months(season.get("months"))
+            return format_rows(season.get(key))
+
+        multiline = selector.TextSelector(selector.TextSelectorConfig(multiline=True))
+        fields: dict = {
+            vol.Optional("name", description={"suggested_value": (user_input or plan).get("name")}): str,
+            vol.Optional(
+                "currency",
+                description={"suggested_value": (user_input or plan).get("currency") or self.hass.config.currency},
+            ): str,
+        }
+        for n in (1, 2):
+            fields[vol.Optional(f"season{n}_name", description={"suggested_value": season_value(n, "name")})] = str
+            fields[vol.Optional(f"season{n}_months", description={"suggested_value": season_value(n, "months")})] = str
+            fields[vol.Optional(f"season{n}_weekday", description={"suggested_value": season_value(n, "weekday")})] = multiline
+            fields[vol.Optional(f"season{n}_weekend", description={"suggested_value": season_value(n, "weekend")})] = multiline
+
+        return self.async_show_form(
+            step_id="rate_plan",
+            data_schema=vol.Schema(fields),
+            errors=errors,
+            description_placeholders=placeholders,
+        )
+
+    async def async_step_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Integration settings (the original options form)."""
         errors = {}
 
         if user_input is not None:
@@ -664,7 +749,7 @@ class SolaredgeModbusMultiOptionsFlowHandler(OptionsFlow):
             }
 
         return self.async_show_form(
-            step_id="init",
+            step_id="settings",
             data_schema=vol.Schema(
                 {
                     vol.Optional(

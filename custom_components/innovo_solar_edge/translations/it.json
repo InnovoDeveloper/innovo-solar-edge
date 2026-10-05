@@ -81,16 +81,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "Opzioni Modbus SolarEdge",
-        "data": {
-          "scan_interval": "Frequenza di polling (secondi)",
-          "close_after_polling": "Chiudi la connessione dopo il polling",
-          "detect_meters": "Misuratori di rilevamento automatico",
-          "detect_batteries": "Rilevamento automatico delle batterie",
-          "detect_extras": "Rileva automaticamente entità aggiuntive",
-          "advanced_power_control": "Opzioni di controllo della potenza",
-          "request_timeout": "Timeout richiesta Modbus (secondi)",
-          "sleep_after_write": "Ritardo comando inverter (secondi)"
+        "title": "SolarEdge options",
+        "menu_options": {
+          "settings": "Integration settings",
+          "rate_plan": "Electricity rate plan"
         }
       },
       "adv_pwr_ctl": {
@@ -107,6 +101,19 @@
           "allow_battery_energy_reset": "Consenti il ripristino dell'energia della batteria",
           "battery_energy_reset_cycles": "Cicli di aggiornamento per ripristinare l'energia della batteria",
           "battery_rating_adjust": "Regolazione della potenza della batteria (percentuale)"
+        }
+      },
+      "settings": {
+        "title": "Opzioni Modbus SolarEdge",
+        "data": {
+          "scan_interval": "Frequenza di polling (secondi)",
+          "close_after_polling": "Chiudi la connessione dopo il polling",
+          "detect_meters": "Misuratori di rilevamento automatico",
+          "detect_batteries": "Rilevamento automatico delle batterie",
+          "detect_extras": "Rileva automaticamente entità aggiuntive",
+          "advanced_power_control": "Opzioni di controllo della potenza",
+          "request_timeout": "Timeout richiesta Modbus (secondi)",
+          "sleep_after_write": "Ritardo comando inverter (secondi)"
         }
       }
     },

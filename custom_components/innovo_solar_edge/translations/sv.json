@@ -81,16 +81,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "SolarEdge Modbus-alternativ",
-        "data": {
-          "scan_interval": "Avfrågningsfrekvens (sekunder)",
-          "close_after_polling": "Stäng anslutningen efter avfrågning",
-          "detect_meters": "Automatisk identifiering av mätare",
-          "detect_batteries": "Automatisk identifiering av batterier",
-          "detect_extras": "Automatisk identifiering av ytterligare entiteter",
-          "advanced_power_control": "Effektstyrningsalternativ",
-          "request_timeout": "Tidsgräns för Modbus-förfrågan (sekunder)",
-          "sleep_after_write": "Fördröjning för växelriktarkommando (sekunder)"
+        "title": "SolarEdge options",
+        "menu_options": {
+          "settings": "Integration settings",
+          "rate_plan": "Electricity rate plan"
         }
       },
       "adv_pwr_ctl": {
@@ -107,6 +101,19 @@
           "allow_battery_energy_reset": "Tillåt återställning av batterienergi",
           "battery_energy_reset_cycles": "Uppdateringscykler för att återställa batterienergi",
           "battery_rating_adjust": "Justering av batterikapacitet (procent)"
+        }
+      },
+      "settings": {
+        "title": "SolarEdge Modbus-alternativ",
+        "data": {
+          "scan_interval": "Avfrågningsfrekvens (sekunder)",
+          "close_after_polling": "Stäng anslutningen efter avfrågning",
+          "detect_meters": "Automatisk identifiering av mätare",
+          "detect_batteries": "Automatisk identifiering av batterier",
+          "detect_extras": "Automatisk identifiering av ytterligare entiteter",
+          "advanced_power_control": "Effektstyrningsalternativ",
+          "request_timeout": "Tidsgräns för Modbus-förfrågan (sekunder)",
+          "sleep_after_write": "Fördröjning för växelriktarkommando (sekunder)"
         }
       }
     },

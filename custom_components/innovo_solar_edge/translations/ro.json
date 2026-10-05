@@ -81,16 +81,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "Opțiuni Modbus SolarEdge",
-        "data": {
-          "scan_interval": "Frecvență de Interogare (secunde)",
-          "close_after_polling": "Închide Conexiunea După Interogare",
-          "detect_meters": "Detectare Automată a Contoarelor",
-          "detect_batteries": "Detectare Automată a Bateriilor",
-          "detect_extras": "Detectare Automată a Entităților Suplimentare",
-          "advanced_power_control": "Opțiuni de Control al Puterii",
-          "request_timeout": "Timeout Solicitare Modbus (secunde)",
-          "sleep_after_write": "Întârziere Comandă Invertor (secunde)"
+        "title": "SolarEdge options",
+        "menu_options": {
+          "settings": "Integration settings",
+          "rate_plan": "Electricity rate plan"
         }
       },
       "adv_pwr_ctl": {
@@ -107,6 +101,19 @@
           "allow_battery_energy_reset": "Permite Resetarea Energiei Bateriei",
           "battery_energy_reset_cycles": "Cicluri de Actualizare pentru Resetarea Energiei Bateriei",
           "battery_rating_adjust": "Ajustare Capacitate Baterie (procent)"
+        }
+      },
+      "settings": {
+        "title": "Opțiuni Modbus SolarEdge",
+        "data": {
+          "scan_interval": "Frecvență de Interogare (secunde)",
+          "close_after_polling": "Închide Conexiunea După Interogare",
+          "detect_meters": "Detectare Automată a Contoarelor",
+          "detect_batteries": "Detectare Automată a Bateriilor",
+          "detect_extras": "Detectare Automată a Entităților Suplimentare",
+          "advanced_power_control": "Opțiuni de Control al Puterii",
+          "request_timeout": "Timeout Solicitare Modbus (secunde)",
+          "sleep_after_write": "Întârziere Comandă Invertor (secunde)"
         }
       }
     },

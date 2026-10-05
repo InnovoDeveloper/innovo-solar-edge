@@ -81,16 +81,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "SolarEdge Modbus Optionen",
-        "data": {
-          "scan_interval": "Abfragehäufigkeit (Sekunden)",
-          "close_after_polling": "Verbindung nach Abfrage schließen",
-          "detect_meters": "Messgeräte automatisch erkennen",
-          "detect_batteries": "Batterien automatisch erkennen",
-          "detect_extras": "Zusätzliche Entitäten automatisch erkennen",
-          "advanced_power_control": "Optionen zur Leistungssteuerung",
-          "request_timeout": "Modbus-Anfrage-Zeitüberschreitung (Sekunden)",
-          "sleep_after_write": "Befehlsverzögerung des Wechselrichters (Sekunden)"
+        "title": "SolarEdge options",
+        "menu_options": {
+          "settings": "Integration settings",
+          "rate_plan": "Electricity rate plan"
         }
       },
       "adv_pwr_ctl": {
@@ -107,6 +101,19 @@
           "allow_battery_energy_reset": "Batterieenergie zurücksetzen lassen",
           "battery_energy_reset_cycles": "Aktualisierungszyklen zum Zurücksetzen der Batterieenergie",
           "battery_rating_adjust": "Anpassung der Batterieleistung (Prozent)"
+        }
+      },
+      "settings": {
+        "title": "SolarEdge Modbus Optionen",
+        "data": {
+          "scan_interval": "Abfragehäufigkeit (Sekunden)",
+          "close_after_polling": "Verbindung nach Abfrage schließen",
+          "detect_meters": "Messgeräte automatisch erkennen",
+          "detect_batteries": "Batterien automatisch erkennen",
+          "detect_extras": "Zusätzliche Entitäten automatisch erkennen",
+          "advanced_power_control": "Optionen zur Leistungssteuerung",
+          "request_timeout": "Modbus-Anfrage-Zeitüberschreitung (Sekunden)",
+          "sleep_after_write": "Befehlsverzögerung des Wechselrichters (Sekunden)"
         }
       }
     },

@@ -13,5 +13,9 @@ Modifications by Innovo:
   settings), wired into __init__.py, sensor.py, number.py and the options flow.
 - Added provision.py and services.yaml: an action and button that configure
   the Home Assistant Energy dashboard and build a Solar & Energy dashboard.
+- Added tariff.py: electricity rate plans (time-of-use seasons, tiers, export
+  credit, price override) editable in a new options-flow menu step and through
+  set_tariff / set_tariff_rates actions; the options form moved to a
+  "settings" step behind that menu.
 - Child devices are linked to the inverter with via_device_id (registered in
   __init__.py) instead of the deprecated via_device.
