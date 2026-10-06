@@ -105,6 +105,19 @@ async def async_provision_energy(hass: HomeAssistant, entry: ConfigEntry, model:
     _LOGGER.info("Energy dashboard provisioned with %d SolarEdge sources", len(sources))
 
 
+def _when_numeric(card: dict[str, Any]) -> dict[str, Any]:
+    """Only show a gauge once its entity has a number (e.g. not while 'learning')."""
+    entity = card["entity"]
+    return {
+        "type": "conditional",
+        "conditions": [
+            {"condition": "state", "entity": entity, "state_not": "unknown"},
+            {"condition": "state", "entity": entity, "state_not": "unavailable"},
+        ],
+        "card": card,
+    }
+
+
 def _dashboard_config(hass: HomeAssistant, model: EnergyModel, title: str) -> dict[str, Any]:
     _, energy = _resolver(hass, model)
 
@@ -159,7 +172,7 @@ def _dashboard_config(hass: HomeAssistant, model: EnergyModel, title: str) -> di
     ) if e and e["entity"]]
 
     cards = [
-        {"type": "horizontal-stack", "cards": [g for g in gauges if g["entity"]]},
+        {"type": "horizontal-stack", "cards": [_when_numeric(g) for g in gauges if g["entity"]]},
         {"type": "energy-date-selection"},
         {"type": "energy-distribution", "title": "Energy distribution", "link_dashboard": True},
         {"type": "energy-sankey", "title": "Where the energy went"},
