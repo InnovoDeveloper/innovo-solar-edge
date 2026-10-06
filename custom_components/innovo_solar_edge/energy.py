@@ -64,6 +64,9 @@ SOE_WINDOW_S = 120  # battery power is the SoE slope over this window
 BATTERY_DEADBAND_W = 100
 HISTORY_DAYS = 365
 ARRAY_ISSUE = "energy_array_settings"
+ARRAY_TOO_SMALL_ISSUE = "energy_array_too_small"
+ARRAY_TOO_LARGE_ISSUE = "energy_array_too_large"
+LOCATION_ISSUE = "energy_location_missing"
 
 # Typical monthly output (kWh per kW of panels) comes from NREL PVWatts v8 for
 # HA's home location rounded to ~1 km, plus the tilt/azimuth settings. It can be
@@ -150,6 +153,7 @@ class EnergyModel:
             "month": stored.get("month"),
             "tariff": stored.get("tariff"),
             "snapshot_secret": stored.get("snapshot_secret"),
+            "peak_dc": stored.get("peak_dc") or {},
             "series": stored.get("series") or {"date": None, "pts": []},
             "provisioned": stored.get("provisioned"),
             "battery_seen": stored.get("battery_seen"),
@@ -234,6 +238,62 @@ class EnergyModel:
                 self.hass, DOMAIN, issue_id, is_fixable=False,
                 severity=ir.IssueSeverity.WARNING, translation_key=ARRAY_ISSUE,
             )
+        self._update_plausibility_issues()
+
+    @property
+    def array_w(self) -> float:
+        return float(self.settings["panel_count"]) * float(self.settings["panel_watts"])
+
+    @callback
+    def _track_peak_dc(self, dc_w: float | None) -> None:
+        """Remember the highest DC input seen, to sanity-check the panel settings."""
+        if dc_w is None or dc_w <= self.data.get("peak_dc", {}).get("w", 0):
+            return
+        self.data["peak_dc"] = {"w": round(dc_w), "date": dt_util.now().date().isoformat()}
+        self._update_plausibility_issues()
+
+    @callback
+    def _update_plausibility_issues(self) -> None:
+        """Warn when the entered array can't match what the inverter measures,
+        or when HA's home location (used for the sun and PVWatts) isn't set."""
+        peak = self.data.get("peak_dc", {}).get("w", 0)
+        issue_id = f"{ARRAY_TOO_SMALL_ISSUE}_{self.entry.entry_id}"
+        # panels never deliver more than their rating at the inverter's DC input
+        if self.settings.get("confirmed") and peak > self.array_w * 1.05:
+            ir.async_create_issue(
+                self.hass, DOMAIN, issue_id, is_fixable=False,
+                severity=ir.IssueSeverity.WARNING, translation_key=ARRAY_TOO_SMALL_ISSUE,
+                translation_placeholders={
+                    "configured": f"{self.array_w / 1000:.1f}",
+                    "measured": f"{peak / 1000:.1f}",
+                    "minimum": f"{peak / 0.8 / 1000:.1f}",
+                },
+            )
+        else:
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+
+        issue_id = f"{ARRAY_TOO_LARGE_ISSUE}_{self.entry.entry_id}"
+        inverter_kw = self.inverter_kw
+        if self.settings.get("confirmed") and inverter_kw and self.array_w > inverter_kw * 2000:
+            ir.async_create_issue(
+                self.hass, DOMAIN, issue_id, is_fixable=False,
+                severity=ir.IssueSeverity.WARNING, translation_key=ARRAY_TOO_LARGE_ISSUE,
+                translation_placeholders={
+                    "configured": f"{self.array_w / 1000:.1f}",
+                    "inverter": f"{inverter_kw:g}",
+                },
+            )
+        else:
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+
+        issue_id = f"{LOCATION_ISSUE}_{self.entry.entry_id}"
+        if not round(self.hass.config.latitude, 2) and not round(self.hass.config.longitude, 2):
+            ir.async_create_issue(
+                self.hass, DOMAIN, issue_id, is_fixable=False,
+                severity=ir.IssueSeverity.WARNING, translation_key=LOCATION_ISSUE,
+            )
+        else:
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
 
     async def async_stop(self) -> None:
         self.snapshot.stop()
@@ -315,6 +375,7 @@ class EnergyModel:
 
         return {
             "inv_w": self._num(self._source("sensor", f"{inv}_ac_power")),
+            "dc_w": self._num(self._source("sensor", f"{inv}_dc_power")),
             "ac_energy": self._num(self._source("sensor", f"{inv}_ac_energy_kwh")),
             "status": status.state if status else None,
             "vendor": vendor.state if vendor else None,
@@ -344,6 +405,7 @@ class EnergyModel:
             self._compute_today(raw)
             self._record_series()
             self._compute_metrics()
+            self._track_peak_dc(raw["dc_w"])
         except Exception:  # never take the integration down over a derived value
             _LOGGER.exception("Energy model update failed")
             return
@@ -793,6 +855,11 @@ ATTRIBUTES: dict[str, Callable[[EnergyModel], dict[str, Any]]] = {
     "solar_efficiency_history": lambda m: {"meaning": "Best 3 of last 7 days vs this system's own best, season-adjusted"},
     "solar_lifetime_daily_average": lambda m: {"since": m.settings.get("commissioned")},
     "daily_history": lambda m: {"days": m.data["history"]},
+    "solar_array_size": lambda m: {
+        "peak_dc_input_kw": round(m.data["peak_dc"]["w"] / 1000, 2) if m.data["peak_dc"] else None,
+        "peak_dc_input_date": m.data["peak_dc"].get("date"),
+        "meaning": "The array must be rated above the highest DC input the inverter has measured",
+    },
 }
 
 

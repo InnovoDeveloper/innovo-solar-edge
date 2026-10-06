@@ -211,6 +211,18 @@
     "energy_array_settings": {
       "title": "Enter the solar array details",
       "description": "Innovo Solar Edge uses placeholder values (10 x 400 W panels) for the solar array. Open the SolarEdge Energy device and set Solar Panel Count and Solar Panel Watts (and optionally tilt, azimuth and commissioning date) so the efficiency and typical-output metrics are correct. This notice clears once they are set."
+    },
+    "energy_array_too_small": {
+      "title": "Solar panel settings are smaller than what the inverter measures",
+      "description": "The panels are set to {configured} kW, but the inverter has measured {measured} kW coming in from them. Panels can't deliver more than their rating, so the panel count or watts per panel must be too low. On a clear day the inverter usually sees no more than about 80% of the array rating, which puts this array at {minimum} kW or more. Check the optimizer count in the SolarEdge monitoring portal or SetApp (one optimizer per panel) and the panel model, then correct Solar Panel Count and Solar Panel Watts on the SolarEdge Energy device. Until then, typical output, efficiency and the cleaning indicator are wrong."
+    },
+    "energy_array_too_large": {
+      "title": "Solar panel settings look too large for the inverter",
+      "description": "The panels are set to {configured} kW, more than twice the inverter's {inverter} kW rating. SolarEdge inverters are rarely paired with that much panel power. Check Solar Panel Count and Solar Panel Watts on the SolarEdge Energy device; a common mistake is entering the total array size as the watts per panel."
+    },
+    "energy_location_missing": {
+      "title": "Set the home location for solar metrics",
+      "description": "Home Assistant's home location is not set (latitude and longitude are 0). Innovo Solar Edge uses it for sunrise and sunset and for the typical-output lookup, so typical output and efficiency are wrong until it is set. Set it in Settings > System > General, then restart Home Assistant."
     }
   },
   "services": {

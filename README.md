@@ -38,8 +38,13 @@ All inverter, meter and battery entities of the upstream integration, plus a
   image entities (`image.energy_dashboard_image`, `image.energy_screen_<page>`)
   and optionally as files under `/local`. Pages without data yet show a
   "gathering data" placeholder.
-- **Provisioning**: one action builds the HA Energy dashboard and a
-  *Solar & Energy* dashboard from the site's own entities.
+- **Provisioning**: on first run the integration fills in the HA Energy
+  dashboard and a *Solar & Energy* dashboard from the site's own entities, and
+  one action rebuilds them later. Both adapt to the equipment: solar only,
+  solar + meter, or solar + meter + battery.
+- **Sanity checks** (repairs): panel settings smaller than the DC input the
+  inverter has measured, settings far larger than the inverter, placeholder
+  panel values, and a missing home location.
 - **Electricity rate plan**: time-of-use prices with seasons, weekday/weekend
   rows and optional tiers, edited in the UI (Configure → *Electricity rate
   plan*) or over the API; or take the price from any existing price sensor
@@ -71,6 +76,10 @@ Manual install: copy `custom_components/innovo_solar_edge` into the HA config's
 
 ## Provision a site
 
+The full checklist for a new install, including inverter settings, checking
+the panel settings against measurements, rate plans and troubleshooting, is
+in [docs/SITE-SETUP.md](docs/SITE-SETUP.md). In short:
+
 1. Integration → **Configure**:
    - turn on **Detect batteries** if the site has a battery;
    - leave **Auto-Detect Additional Entities** off unless power-control
@@ -85,8 +94,12 @@ Manual install: copy `custom_components/innovo_solar_edge` into the HA config's
    (see the controller reference), or set *Tariff Source* to *Price sensor*.
 3. On the **SolarEdge Energy** device, set *Solar Panel Count* and *Solar Panel
    Watts* (a repair notice reminds you until they're set), and optionally tilt,
-   azimuth and the commissioning date.
-4. Press **Provision Dashboards** on the same device, or call the action:
+   azimuth and the commissioning date. Take the count from the optimizer count
+   in the SolarEdge portal; a repair flags settings smaller than what the
+   inverter measures.
+4. The dashboards are created automatically on first run. To rebuild them
+   (after an update or adding a meter or battery), press **Provision
+   Dashboards** on the same device, or call the action:
 
    ```yaml
    action: innovo_solar_edge.provision_dashboards
