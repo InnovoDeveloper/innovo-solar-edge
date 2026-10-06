@@ -138,6 +138,10 @@ def _dashboard_config(hass: HomeAssistant, model: EnergyModel, title: str) -> di
     ]
     if not grid:
         gauges = [g for g in gauges if g["entity"] != energy("self_sufficiency_today")]
+        gauges.append({"type": "gauge", "entity": energy("solar_today_vs_typical"), "name": "Today vs typical",
+                       "min": 0, "max": 130, "severity": {"green": 80, "yellow": 40, "red": 0}})
+    gauges.insert(0, {"type": "gauge", "entity": energy("solar_power"), "name": "Solar now",
+                      "min": 0, "max": int((model.inverter_kw or 10) * 1000)})
     if battery:
         gauges.insert(0, {"type": "gauge", "entity": energy("battery_level"), "name": "Battery",
                           "min": 0, "max": 100, "severity": {"green": 50, "yellow": 20, "red": 0}})
@@ -154,7 +158,8 @@ def _dashboard_config(hass: HomeAssistant, model: EnergyModel, title: str) -> di
              ("grid_import_today", "Bought from grid"), ("grid_export_today", "Sold to grid")]
     if battery:
         today += [("battery_charged_today", "Battery charged"), ("battery_discharged_today", "Battery discharged")]
-    today += [("self_sufficiency_today", "Self-sufficiency"), ("grid_cost_today", "Grid cost")]
+    today += [("self_sufficiency_today", "Self-sufficiency"), ("grid_cost_today", "Grid cost"),
+              ("saved_today", "Saved today" if grid else "Solar value today")]
 
     settings = [("panel_count", "Number of panels", "number"),
                 ("panel_watts", "Watts per panel", "number"),
