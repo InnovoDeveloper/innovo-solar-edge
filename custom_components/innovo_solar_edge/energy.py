@@ -151,6 +151,8 @@ class EnergyModel:
             "tariff": stored.get("tariff"),
             "snapshot_secret": stored.get("snapshot_secret"),
             "series": stored.get("series") or {"date": None, "pts": []},
+            "provisioned": stored.get("provisioned"),
+            "battery_seen": stored.get("battery_seen"),
         }
         from .tariff import SRC_PLAN, SRC_SENSOR, TariffManager
 
@@ -171,12 +173,36 @@ class EnergyModel:
 
     @callback
     def save_soon(self) -> None:
-        self._store.async_delay_save(lambda: self.data, 5)
+        self._save_pending = True
+        self._store.async_delay_save(self._data_to_save, 5)
 
     @callback
     def recompute(self) -> None:
         """Re-run the update with the latest readings (after a settings change)."""
         self._update(publish=False)
+
+    @property
+    def has_grid(self) -> bool:
+        """A SolarEdge grid (export+import) meter is connected."""
+        return any("Import" in str(m.option) for m in self.hub.meters)
+
+    @property
+    def has_battery(self) -> bool:
+        """A real battery: rated capacity reported, or it has held charge.
+
+        Storage-ready inverters expose an empty battery slot (SunSpec 713) that
+        reports no capacity and 0 % - that is not a battery.
+        """
+        if not (self.hub.batteries or getattr(self.hub, "der_batteries", [])):
+            return False
+        return bool(self._nameplate_kwh() or self.data.get("battery_seen"))
+
+    @property
+    def inverter_kw(self) -> float | None:
+        import re
+
+        match = re.search(r"SE(\d{3,5})", str(getattr(self.inverter, "model", "")))
+        return int(match.group(1)) / 1000 if match else None
 
     def _nameplate_kwh(self) -> float | None:
         for battery in [*self.hub.batteries, *self.hub.der_batteries]:
@@ -218,7 +244,16 @@ class EnergyModel:
 
     @callback
     def _save_later(self) -> None:
-        self._store.async_delay_save(lambda: self.data, SAVE_DELAY)
+        # Store.async_delay_save restarts its timer on every call, so only schedule
+        # when nothing is pending - otherwise 10 s updates would postpone it forever.
+        if getattr(self, "_save_pending", False):
+            return
+        self._save_pending = True
+        self._store.async_delay_save(self._data_to_save, SAVE_DELAY)
+
+    def _data_to_save(self) -> dict[str, Any]:
+        self._save_pending = False
+        return self.data
 
     # ----- settings (number/date entities) -----
 
@@ -228,7 +263,7 @@ class EnergyModel:
         if key in ("panel_count", "panel_watts"):
             self.settings["confirmed"] = True
             self._update_array_issue()
-        self._store.async_delay_save(lambda: self.data, 5)
+        self.save_soon()
         if key in ("tilt", "azimuth"):
             self.hass.async_create_background_task(
                 self._async_refresh_typical(), f"{DOMAIN} pvwatts lookup"
@@ -313,19 +348,39 @@ class EnergyModel:
             _LOGGER.exception("Energy model update failed")
             return
         self._save_later()
+        if not self.data.get("provisioned") and not getattr(self, "_provisioning", False)                 and self.values.get("inverter_status") not in (None, "Offline")                 and self.values.get("solar_w") is not None:
+            self._provisioning = True
+            self.hass.async_create_background_task(self._async_first_run(), f"{DOMAIN} first-run setup")
         if publish:
             async_dispatcher_send(self.hass, signal_update(self.entry.entry_id))
 
-    def _sun_up(self, inv_w: float | None) -> bool:
+    async def _async_first_run(self) -> None:
+        """Wait for all entities to register, then fill in missing dashboards once."""
+        await asyncio.sleep(60)
+        from .provision import async_auto_provision
+
+        try:
+            await async_auto_provision(self.hass, self.entry, self)
+        except Exception:
+            _LOGGER.exception("First-run provisioning failed")
+
+    def _sun_up(self, inv_w: float | None, battery_w: float | None = None) -> bool:
+        """Is inverter output solar? Doesn't rely on HA's location being right."""
         sun = self.hass.states.get("sun.sun")
-        if sun is None:
-            return bool(inv_w and inv_w > 0)
-        return sun.state == "above_horizon"
+        if sun is not None and sun.state == "above_horizon":
+            return True
+        # producing while no battery is discharging can only be solar
+        return bool(inv_w and inv_w > 50 and (battery_w is None or battery_w > -BATTERY_DEADBAND_W))
 
     def _compute_live(self, raw: dict[str, Any]) -> None:
         v = self.values
         cap = self.settings["battery_kwh"]
         soe = raw["soe"]
+        if soe is not None and soe > 0.5 and not self.data.get("battery_seen"):
+            self.data["battery_seen"] = True
+        if not self.has_battery:
+            soe = None
+            v["battery_w"] = None
 
         if soe is not None:
             now = time.monotonic()
@@ -344,7 +399,7 @@ class EnergyModel:
         v["house_w"] = None if grid_w is None or inv_w is None else round(max(grid_w + inv_w, 0))
         if inv_w is None:
             v["solar_w"] = None
-        elif not self._sun_up(inv_w):
+        elif not self._sun_up(inv_w, battery_w):
             v["solar_w"] = 0
         else:
             v["solar_w"] = round(max(inv_w + (battery_w or 0), 0))
@@ -388,6 +443,8 @@ class EnergyModel:
     def _accumulate(self, raw: dict[str, Any]) -> None:
         """Battery in/out from SoE deltas; PV = inverter AC delta + stored delta."""
         ac, soe = raw["ac_energy"], raw["soe"]
+        if not self.has_battery:
+            soe = 0.0
         if ac is None or soe is None:
             return
         acc, last, cap = self.data["acc"], self.data["last"], self.settings["battery_kwh"]
@@ -402,7 +459,7 @@ class EnergyModel:
                 acc["charged"] += d_store
             else:
                 acc["discharged"] -= d_store
-            if self._sun_up(raw["inv_w"]):
+            if self._sun_up(raw["inv_w"], self.values.get("battery_w")):
                 # Carry small negatives forward so SoE rounding can't bias PV upward.
                 pending = self.data["pending"] + d_ac + d_store
                 if pending > 0:
@@ -475,6 +532,11 @@ class EnergyModel:
                 if 0 < self_kwh < 5:
                     day["saved"] = day.get("saved", 0.0) + self_kwh * rate["price"]
             day["prev_house"], day["prev_import"] = house, t["import"]
+        if not self.has_grid and t["solar"] is not None and rate["price"] is not None:
+            prev_solar = day.get("prev_solar")
+            if prev_solar is not None and 0 < t["solar"] - prev_solar < 5:
+                day["saved"] = day.get("saved", 0.0) + (t["solar"] - prev_solar) * rate["price"]
+            day["prev_solar"] = t["solar"]
         v["saved_today"] = round(day.get("saved", 0.0), 2)
         v["today"] = t
         v["house_today"] = house

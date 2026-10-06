@@ -70,6 +70,11 @@ def screen_data(model) -> dict:
         "best_date": v.get("best_date"),
         "avg7": v.get("avg7"),
         "lifetime_avg": v.get("lifetime_avg"),
+        "has_grid": model.has_grid,
+        "has_battery": model.has_battery,
+        "inverter_kw": model.inverter_kw,
+        "typical_today": v.get("typical_today"),
+        "today_vs_typical": v.get("today_vs_typical"),
     }
 
     series = model.data.get("series") or {}

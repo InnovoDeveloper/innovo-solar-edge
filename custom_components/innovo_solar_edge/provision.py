@@ -40,12 +40,16 @@ def _resolver(hass: HomeAssistant, model: EnergyModel):
     return ent, energy
 
 
+NO_GRID = {"house_power", "grid_power", "grid_state", "solar_share_now", "house_today", "grid_import_today",
+           "grid_export_today", "self_sufficiency_today", "grid_cost_today"}
+
+
 def _grid_meter(model: EnergyModel):
     return next((m for m in model.hub.meters if "Import" in str(m.option)), None)
 
 
 def _has_battery(model: EnergyModel) -> bool:
-    return bool(model.hub.batteries or model.hub.der_batteries)
+    return model.has_battery
 
 
 async def async_provision_energy(hass: HomeAssistant, entry: ConfigEntry, model: EnergyModel) -> None:
@@ -105,18 +109,22 @@ def _dashboard_config(hass: HomeAssistant, model: EnergyModel, title: str) -> di
     _, energy = _resolver(hass, model)
 
     def rows(*specs):
-        return [{"entity": e, "name": n} for e, n in ((energy(k, *p), n) for k, n, *p in specs) if e]
+        keep = [spec for spec in specs if model.has_grid or spec[0] not in NO_GRID]
+        return [{"entity": e, "name": n} for e, n in ((energy(k, *p), n) for k, n, *p in keep) if e]
 
     def entities_card(card_title, *specs):
         return {"type": "entities", "title": card_title, "entities": rows(*specs)}
 
     battery = _has_battery(model)
+    grid = model.has_grid
     gauges = [
         {"type": "gauge", "entity": energy("solar_efficiency_spec"), "name": "Efficiency vs spec",
          "min": 0, "max": 130, "severity": {"green": 95, "yellow": 85, "red": 0}},
         {"type": "gauge", "entity": energy("self_sufficiency_today"), "name": "Self-sufficiency today",
          "min": 0, "max": 100, "severity": {"green": 60, "yellow": 30, "red": 0}},
     ]
+    if not grid:
+        gauges = [g for g in gauges if g["entity"] != energy("self_sufficiency_today")]
     if battery:
         gauges.insert(0, {"type": "gauge", "entity": energy("battery_level"), "name": "Battery",
                           "min": 0, "max": 100, "severity": {"green": 50, "yellow": 20, "red": 0}})
@@ -145,8 +153,8 @@ def _dashboard_config(hass: HomeAssistant, model: EnergyModel, title: str) -> di
 
     graph = [e for e in (
         {"entity": energy("solar_power"), "name": "Solar"},
-        {"entity": energy("house_power"), "name": "House"},
-        {"entity": energy("grid_power"), "name": "Grid"},
+        {"entity": energy("house_power"), "name": "House"} if grid else None,
+        {"entity": energy("grid_power"), "name": "Grid"} if grid else None,
         {"entity": energy("battery_level"), "name": "Battery %"} if battery else None,
     ) if e and e["entity"]]
 
@@ -190,8 +198,12 @@ def _dashboard_config(hass: HomeAssistant, model: EnergyModel, title: str) -> di
 
 def _dashboards_collection(hass: HomeAssistant):
     """The live storage-dashboards collection (held by HA's websocket handler)."""
+    import inspect
+
     handler = hass.data.get("websocket_api", {}).get("lovelace/dashboards/create", (None,))[0]
-    handler = getattr(handler, "__wrapped__", handler)
+    if handler is None:
+        return None
+    handler = inspect.unwrap(handler)  # require_admin(async_response(ws_create_item))
     return getattr(getattr(handler, "__self__", None), "storage_collection", None)
 
 
@@ -240,6 +252,40 @@ class ProvisionButton(EnergyEntityMixin, ButtonEntity):
 def energy_buttons(hass: HomeAssistant, entry: ConfigEntry) -> list[ButtonEntity]:
     model = hass.data[DOMAIN][entry.entry_id].get("energy")
     return [ProvisionButton(model)] if model else []
+
+
+async def async_auto_provision(hass: HomeAssistant, entry: ConfigEntry, model: EnergyModel) -> None:
+    """First-run setup: fill in only what the site doesn't have yet, once."""
+    from homeassistant.components.energy.data import async_get_manager
+    from homeassistant.components.lovelace.const import LOVELACE_DATA
+
+    if model.data.get("provisioned"):
+        return
+    manager = await async_get_manager(hass)
+    sources = (manager.data or {}).get("energy_sources", [])
+    need_energy = not any(src.get("type") in ("grid", "solar", "battery") for src in sources)
+    lovelace = hass.data.get(LOVELACE_DATA)
+    need_dashboard = lovelace is not None and DEFAULT_URL_PATH not in lovelace.dashboards
+    done, failed = [], False
+    if need_energy:
+        try:
+            await async_provision_energy(hass, entry, model)
+            done.append("energy dashboard")
+        except Exception as err:  # retried on the next start, or by the button / action
+            failed = True
+            _LOGGER.warning("Automatic Energy dashboard setup failed: %s", err)
+    if need_dashboard:
+        try:
+            await async_provision_dashboard(hass, model, DEFAULT_URL_PATH, DEFAULT_TITLE)
+            done.append("Solar & Energy dashboard")
+        except Exception as err:
+            failed = True
+            _LOGGER.warning("Automatic Solar & Energy dashboard setup failed: %s", err)
+    if failed:
+        return  # not marked done: missing parts are tried again on the next start
+    model.data["provisioned"] = done or ["nothing needed"]
+    model.save_soon()
+    _LOGGER.info("First-run provisioning: %s", ", ".join(model.data["provisioned"]))
 
 
 async def async_provision(

@@ -46,6 +46,7 @@ GRID = (64, 156, 255)
 BATT = (0, 232, 130)
 BATT2 = (0, 200, 255)
 RED = (255, 82, 102)
+GREEN = BATT
 MAGENTA = (255, 64, 200)
 
 FONT_DIR = os.path.join(os.path.dirname(__file__), "fonts")
@@ -415,10 +416,10 @@ def _axes_hours(cv, x, y, w, h, size=12):
         cv.text((gx, y + h + 7), f"{hr:02d}", size, MUTED, "semi", anchor="mt")
 
 
-def _power_chart(cv, v, x, y, w, h, compact=False):
+def _power_chart(cv, v, x, y, w, h, compact=False, solar_only=False):
     """Today's solar area, home and grid lines, battery %, price bands and a NOW marker."""
     pts = v.get("series") or []
-    peak = max([max(p[1] or 0, p[2] or 0, abs(p[3] or 0)) for p in pts] + [2000]) * 1.15
+    peak = max([max(p[1] or 0, p[2] or 0, abs(p[3] or 0)) for p in pts] + [1000 if solar_only else 2000]) * 1.15
 
     def X(minute):
         return x + w * minute / 1440
@@ -447,8 +448,9 @@ def _power_chart(cv, v, x, y, w, h, compact=False):
         mask.paste(fade, (0, int(y * SS)))
         cv.img.paste(grad, (0, 0), ImageChops.multiply(area, mask).point(lambda val: int(val * 0.55)))
         cv.line(poly, SOLAR, 2 if compact else 2.2, glow=4 if compact else 5)
-        cv.line([(X(p[0]), Y(max(p[3] or 0, 0))) for p in pts], GRID, 1.6, glow=3, alpha=230)
-        cv.line([(X(p[0]), Y(p[2] or 0)) for p in pts], HOME, 1.8 if compact else 2.2, glow=4)
+        if not solar_only:
+            cv.line([(X(p[0]), Y(max(p[3] or 0, 0))) for p in pts], GRID, 1.6, glow=3, alpha=230)
+            cv.line([(X(p[0]), Y(p[2] or 0)) for p in pts], HOME, 1.8 if compact else 2.2, glow=4)
         soe = [(X(p[0]), y + h - h * p[5] / 100) for p in pts if p[5] is not None]
         if len(soe) > 1:
             cv.line(soe, BATT, 1.5, alpha=200)
@@ -836,6 +838,254 @@ RENDERERS = {
 }
 
 
+
+# ----------------------------------------------------------------------------
+# Solar-only variants (no SolarEdge grid meter) and the no-battery page
+# ----------------------------------------------------------------------------
+
+METER_NOTE = "ADD A SOLAREDGE METER TO SEE HOME & GRID"
+
+
+def _solar_gauge(cv, v, cx, cy, r, width, big):
+    """Output vs inverter capacity: a 270-degree gauge with the live kW inside."""
+    cap = v.get("inverter_kw") or 0
+    solar = (v.get("solar_w") or 0) / 1000
+    frac = min(solar / cap, 1) if cap else 0
+    box = [(cx - r) * SS, (cy - r) * SS, (cx + r) * SS, (cy + r) * SS]
+    cv.d.arc(box, 135, 405, fill=(255, 255, 255, 22), width=int(width * SS))
+    cv.arc(cx, cy, r, 135, 135 + 270 * frac, width, SOLAR2, SOLAR, glow=width * 0.6, track=False)
+    cv.icon_sun(cx, cy - r * 0.42, r * 0.32)
+    cv.glow_text((cx, cy + r * 0.02), f"{solar:.1f}", big, TEXT, "bold")
+    cv.text((cx, cy + r * 0.34), "kW SOLAR NOW", max(int(big * 0.16), 10), MUTED, "semi", anchor="mm", spacing=2)
+    if cap:
+        cv.text((cx, cy + r * 0.62), f"{frac * 100:.0f}% OF {cap:g} kW", max(int(big * 0.15), 10), SOLAR, "semi",
+                anchor="mm", spacing=1)
+
+
+def _note(cv, y=596):
+    cv.text((360, y), METER_NOTE, 11, DIM, "semi", anchor="mm", spacing=2)
+
+
+def page_live_solar(data: dict) -> bytes:
+    cv = Canvas("live", data)
+    v, cur = data, data["currency"]
+    _sun_arc(cv, v, 360, 205, 290, 112)
+    _solar_gauge(cv, v, 360, 372, 150, 22, 76)
+    t = v.get("today") or {}
+    pcol = period_color(v.get("period"))
+    vs = v.get("today_vs_typical")
+    kpis = [
+        ("PRODUCED TODAY", "—" if t.get("solar") is None else f"{t['solar']:.1f} kWh", SOLAR),
+        ("PRICE NOW", fmt_price(v.get("price"), cur), pcol),
+        ("SOLAR VALUE", fmt_money(v.get("saved_today"), cur), GREEN),
+    ]
+    for i, (label, value, col) in enumerate(kpis):
+        x = 24 + i * 228
+        cv.card(x, 618, 216, 72, accent=col)
+        cv.text((x + 18, 630), label, 12, MUTED, "semi", spacing=2)
+        cv.text((x + 18, 646), value, 30, col, "bold")
+    if vs is not None:
+        cv.text((24 + 216 - 14, 682), f"{vs:.0f}% OF TYPICAL", 11, SOLAR, "semi", anchor="rs", spacing=1)
+    _note(cv)
+    return cv.png()
+
+
+def _solar_chart(cv, v, x, y, w, h, compact=False):
+    """Solar area (+ battery % if any) with typical marker and NOW line."""
+    data = dict(v)
+    data["series"] = [[p[0], p[1], None, None, p[4], p[5]] for p in (v.get("series") or [])]
+    return _power_chart(cv, data, x, y, w, h, compact=compact, solar_only=True)
+
+
+def page_overview_solar(data: dict) -> bytes:
+    cv = Canvas("overview", data)
+    v, cur = data, data["currency"]
+    t = v.get("today") or {}
+    cv.card(24, 88, 420, 300)
+    cv.text((40, 100), "SOLAR NOW", 11, MUTED, "semi", spacing=2)
+    _sun_arc(cv, v, 234, 190, 175, 70, labels=False)
+    _solar_gauge(cv, v, 234, 268, 92, 14, 46)
+
+    cv.card(456, 88, 240, 300)
+    cv.text((472, 100), "TODAY", 11, MUTED, "semi", spacing=2)
+    produced = t.get("solar")
+    cv.glow_text((576, 172), "—" if produced is None else f"{produced:.1f}", 54, SOLAR, "bold")
+    cv.text((576, 212), "kWh PRODUCED", 12, MUTED, "semi", anchor="mm", spacing=2)
+    typical, vs = v.get("typical_today"), v.get("today_vs_typical")
+    cv.arc(576, 300, 46, -90, -90 + 360 * min((vs or 0) / 100, 1), 9, SOLAR2, SOLAR, glow=5)
+    cv.text((576, 300), "—" if vs is None else f"{vs:.0f}%", 20, TEXT, "bold", anchor="mm")
+    cv.text((576, 362), f"OF TYPICAL {typical:.1f} kWh" if typical else "OF TYPICAL", 11, MUTED, "semi", anchor="mm", spacing=1)
+
+    cv.card(24, 400, 672, 176)
+    cv.text((40, 412), "SOLAR TODAY", 11, MUTED, "semi", spacing=2)
+    _solar_chart(cv, v, 40, 436, 640, 104, compact=True)
+
+    pcol = period_color(v.get("period"))
+    eff = v.get("efficiency")
+    clean = v.get("cleaning")
+    tiles = [
+        ("SOLAR VALUE", fmt_money(v.get("saved_today"), cur), "TODAY", GREEN),
+        ("PRICE NOW", fmt_price(v.get("price"), cur), (v.get("period") or "").upper(), pcol),
+        ("7-DAY AVG", f"{v['avg7']:.1f}" if v.get("avg7") else "—", "kWh / DAY", SOLAR),
+        ("PANELS VS SPEC", "—" if eff is None else f"{eff:.0f}%",
+         f"{(v.get('health') or '—').upper()}{'  ·  CLEAN' if clean == 'Yes' else ''}", RED if clean == "Yes" else SOLAR),
+    ]
+    for i, (label, value, sub, col) in enumerate(tiles):
+        x = 24 + i * 170
+        cv.card(x, 588, 160, 102, accent=col)
+        cv.text((x + 16, 600), label, 11, MUTED, "semi", spacing=1)
+        cv.text((x + 16, 618), value, 32, col, "bold")
+        cv.text((x + 16, 674), sub, 10, MUTED, "semi", anchor="ls", spacing=1)
+    return cv.png()
+
+
+def page_today_solar(data: dict) -> bytes:
+    cv = Canvas("today", data)
+    v, cur = data, data["currency"]
+    cv.card(24, 88, 672, 368)
+    _legend(cv, 44, 102, (("SOLAR", SOLAR),) + ((("BATTERY %", BATT),) if v.get("has_battery") else ()), 120)
+    pts = _solar_chart(cv, v, 44, 118, 640, 290)
+    t = v.get("today") or {}
+    peak = max(pts, key=lambda p: p[1] or 0) if pts else None
+    kpis = [("PRODUCED", None if t.get("solar") is None else f"{t['solar']:.1f}", "kWh", SOLAR),
+            ("TYPICAL", None if v.get("typical_today") is None else f"{v['typical_today']:.1f}", "kWh", CYAN),
+            ("VS TYPICAL", None if v.get("today_vs_typical") is None else f"{v['today_vs_typical']:.0f}", "%", GREEN),
+            ("PEAK", None if not peak or not peak[1] else f"{peak[1] / 1000:.2f}", "kW", SOLAR2)]
+    for i, (label, value, unit, col) in enumerate(kpis):
+        kx = 24 + i * 170
+        cv.card(kx, 470, 160, 96, accent=col)
+        cv.text((kx + 18, 484), label, 12, MUTED, "semi", spacing=2)
+        cv.text((kx + 18, 502), value or "—", 36, col, "bold")
+        cv.text((kx + 142, 552), unit, 12, MUTED, "semi", anchor="rs")
+    cv.card(24, 580, 672, 110)
+    cv.text((44, 596), "SOLAR VALUE TODAY", 12, MUTED, "semi", spacing=2)
+    cv.text((44, 614), fmt_money(v.get("saved_today"), cur), 34, GREEN, "bold")
+    cv.text((676, 596), "PRICE NOW", 12, MUTED, "semi", anchor="ra", spacing=2)
+    cv.text((676, 614), fmt_price(v.get("price"), cur), 34, period_color(v.get("period")), "bold", anchor="ra")
+    if peak and peak[1]:
+        cv.text((44, 664), f"PEAK AT {peak[0] // 60:02d}:{peak[0] % 60:02d}", 12, MUTED, "semi", spacing=1)
+    cv.text((676, 664), METER_NOTE, 10, DIM, "semi", anchor="ra", spacing=1)
+    return cv.png()
+
+
+def page_battery_none(data: dict) -> bytes:
+    cv = Canvas("battery", data)
+    cx, cy = 360, 300
+    cv.arc(cx, cy, 150, 0, 360, 18, (40, 52, 70), (40, 52, 70), glow=0)
+    cv.icon_battery(cx, cy - 4, 120, None, color=MUTED)
+    cv.text((cx, cy + 210), "NO BATTERY ON THIS SYSTEM", 24, TEXT, "bold", anchor="mm", spacing=3)
+    cv.text((cx, cy + 250), "A home battery stores midday solar for the evening peak", 16, MUTED, "semi", anchor="mm")
+    cv.text((cx, cy + 276), "and keeps the lights on during outages.", 16, MUTED, "semi", anchor="mm")
+    return cv.png()
+
+
+def page_money_solar(data: dict) -> bytes:
+    cv = Canvas("money", data)
+    v, cur = data, data["currency"]
+    cv.text((360, 104), "SOLAR VALUE TODAY", 13, MUTED, "semi", anchor="mm", spacing=3)
+    cv.glow_text((360, 168), fmt_money(v.get("saved_today"), cur), 92, GREEN, "bold")
+    x, y, w, h = 44, 262, 632, 170
+    cv.card(24, 236, 672, 240)
+    slots = v.get("price_slots") or []
+    prices = [p for p, _ in slots if p is not None]
+    if prices:
+        cv.text((44, 248), "PRICE TODAY", 12, MUTED, "semi", spacing=2)
+        top = max(prices) * 1.1
+        now = v["now"]
+        now_slot = (now.hour * 60 + now.minute) // 15
+        bw = w / 96
+        for i, (price, period) in enumerate(slots):
+            if price is None:
+                continue
+            col = period_color(period)
+            bh = h * price / top
+            x0 = x + i * bw
+            cv.d.rectangle([(x0 + 0.6) * SS, (y + h - bh) * SS, (x0 + bw - 0.6) * SS, (y + h) * SS],
+                           fill=col + (255 if i == now_slot else 150,))
+            if i == now_slot:
+                cv.g.rectangle([x0 * SS / 2, (y + h - bh) * SS / 2, (x0 + bw) * SS / 2, (y + h) * SS / 2], fill=col)
+                cv.text((x0 + bw / 2, y + h - bh - 8), fmt_price(price, cur), 16, col, "bold", anchor="mb")
+    else:
+        cv.text((44, 248), "SOLAR PER HOUR", 12, MUTED, "semi", spacing=2)
+        hourly = [0.0] * 24
+        for p in v.get("series") or []:
+            if p[1]:
+                hourly[p[0] // 60] += p[1] * 5 / 60 / 1000
+        top = max(hourly + [0.5]) * 1.15
+        bw = w / 24
+        for hr, kwh in enumerate(hourly):
+            if kwh > 0:
+                bh = h * kwh / top
+                cv.d.rounded_rectangle([(x + hr * bw + 3) * SS, (y + h - bh) * SS, (x + hr * bw + bw - 3) * SS, (y + h) * SS],
+                                       radius=3 * SS, fill=SOLAR + (230,))
+    for hr in (0, 6, 12, 18, 24):
+        cv.text((x + w * hr / 24, y + h + 8), f"{hr:02d}", 12, MUTED, "semi", anchor="mt")
+
+    nxt = v.get("next") or {}
+    t = v.get("today") or {}
+    pcol = period_color(v.get("period"))
+    cards = [
+        ("NOW", fmt_price(v.get("price"), cur), (v.get("period") or "").upper(), pcol),
+        ("NEXT", fmt_price(nxt.get("price"), cur) if nxt else "—",
+         f"{nxt['at']} {(nxt.get('period') or '').upper()}" if nxt else "", period_color(nxt.get("period"))),
+        ("PRODUCED TODAY", "—" if t.get("solar") is None else f"{t['solar']:.1f}", "kWh", SOLAR),
+    ]
+    for i, (lab, val, sub, c) in enumerate(cards):
+        x0 = 24 + i * 228
+        cv.card(x0, 488, 216, 96, accent=c)
+        cv.text((x0 + 18, 500), lab, 12, MUTED, "semi", spacing=2)
+        cv.text((x0 + 18, 518), val, 34, c, "bold")
+        cv.text((x0 + 18, 566), sub, 11, MUTED, "semi", spacing=1)
+    cv.card(24, 596, 672, 94)
+    cv.text((44, 612), "LAST 7 DAYS", 12, MUTED, "semi", spacing=2)
+    cv.text((44, 630), f"SOLAR VALUE {fmt_money(v.get('week_saved'), cur)}", 30, GREEN, "bold")
+    cv.text((676, 612), METER_NOTE, 10, DIM, "semi", anchor="ra", spacing=1)
+    return cv.png()
+
+
+def page_week_solar(data: dict) -> bytes:
+    cv = Canvas("week", data)
+    v = data
+    week = (v.get("week") or [])[-7:]
+    x, y, w, h = 44, 130, 632, 330
+    cv.card(24, 88, 672, 420)
+    _legend(cv, 44, 102, (("SOLAR kWh", SOLAR),), 120)
+    vals = [d.get("solar") or 0 for d in week]
+    if week:
+        top = max(vals + [1]) * 1.15
+        gw = w / 7
+        for i, day in enumerate(week):
+            val = day.get("solar") or 0
+            bh = h * val / top
+            bx = x + i * gw + gw * 0.2
+            cv.d.rounded_rectangle([bx * SS, (y + h - bh) * SS, (bx + gw * 0.6) * SS, (y + h) * SS], radius=4 * SS,
+                                   fill=mix(SOLAR2, SOLAR, val / top) + (235 if not day.get("today") else 140,))
+            cv.text((bx + gw * 0.3, y + h - bh - 6), f"{val:.1f}", 13, TEXT, "semi", anchor="mb")
+            cv.text((bx + gw * 0.3, y + h + 10), day["label"], 13, TEXT if day.get("today") else MUTED,
+                    "bold" if day.get("today") else "semi", anchor="mt", spacing=1)
+    full = [d.get("solar") or 0 for d in week if not d.get("today")]
+    best = max(full) if full else None
+    cards = [("WEEK SOLAR", sum(vals), "kWh", SOLAR), ("DAILY AVERAGE", sum(full) / len(full) if full else None, "kWh", CYAN),
+             ("BEST DAY", best, "kWh", GREEN)]
+    for i, (lab, val, unit, c) in enumerate(cards):
+        x0 = 24 + i * 228
+        cv.card(x0, 520, 216, 82, accent=c)
+        cv.text((x0 + 18, 532), lab, 12, MUTED, "semi", spacing=2)
+        cv.text((x0 + 18, 550), "—" if val is None else f"{val:.0f}" if val >= 100 else f"{val:.1f}", 34, c, "bold")
+        cv.text((x0 + 198, 590), unit, 12, MUTED, "semi", anchor="rs")
+    change = v.get("week_change")
+    cv.card(24, 614, 672, 76)
+    cv.text((44, 628), "SOLAR VS PREVIOUS 7 DAYS", 12, MUTED, "semi", spacing=2)
+    if change is None:
+        cv.text((44, 646), "NEED TWO WEEKS OF HISTORY", 22, MUTED, "bold")
+    else:
+        col = GREEN if change >= 0 else RED
+        tri = [(44, 670), (64, 670), (54, 652)] if change >= 0 else [(44, 652), (64, 652), (54, 670)]
+        cv.d.polygon([(px * SS, py * SS) for px, py in tri], fill=col + (255,))
+        cv.text((74, 644), f"{abs(change):.0f}%", 32, col, "bold")
+    return cv.png()
+
+
 PLACEHOLDER_TEXT = ("Please come back again later,", "we are still gathering the data", "for this page...")
 
 
@@ -857,7 +1107,9 @@ def page_placeholder(page: str, data: dict) -> bytes:
 
 def is_ready(page: str, data: dict) -> bool:
     """Whether a page has enough data to be worth drawing."""
-    live = data.get("inverter") is not None and data.get("house_w") is not None
+    live = data.get("inverter") is not None and (
+        data.get("house_w") is not None if data.get("has_grid", True) else data.get("solar_w") is not None
+    )
     if page in ("overview", "live", "battery", "money"):
         return live
     if page == "today":
@@ -867,7 +1119,20 @@ def is_ready(page: str, data: dict) -> bool:
     return live
 
 
+SOLAR_ONLY = {
+    "overview": page_overview_solar,
+    "live": page_live_solar,
+    "today": page_today_solar,
+    "money": page_money_solar,
+    "week": page_week_solar,
+}
+
+
 def render(page: str, data: dict) -> bytes:
+    if page == "battery" and data.get("has_battery") is False and data.get("inverter") is not None:
+        return page_battery_none(data)
     if not is_ready(page, data):
         return page_placeholder(page, data)
+    if data.get("has_grid") is False and page in SOLAR_ONLY:
+        return SOLAR_ONLY[page](data)
     return RENDERERS[page](data)
