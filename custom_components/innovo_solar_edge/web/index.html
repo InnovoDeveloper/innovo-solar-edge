@@ -38,6 +38,10 @@
           margin-top: 10px; color: var(--muted); font-size: 13px; }
   .meta code { color: var(--text); background: rgba(255,255,255,.06); padding: 3px 8px; border-radius: 6px;
                word-break: break-all; }
+  .url { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
+  button.copy { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border-radius: 8px; flex: none; }
+  button.copy svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  button.copy.done { border-color: #00e882; color: #00e882; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 14px; }
   .tile { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px; cursor: pointer;
           text-align: left; color: inherit; }
@@ -75,7 +79,13 @@
     <div class="viewer"><img id="screen" alt=""></div>
     <div class="meta">
       <span id="caption"></span>
-      <code id="url"></code>
+      <span class="url">
+        <code id="url"></code>
+        <button id="copy" class="copy" type="button" title="Copy address" aria-label="Copy address">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+          <span id="copied" class="hidden">Copied</span>
+        </button>
+      </span>
     </div>
   </section>
   <section id="gallery" class="grid hidden"></section>
@@ -174,6 +184,37 @@
     }
     draw();
   }
+
+  async function copyUrl() {
+    const text = $("url").textContent;
+    let ok = false;
+    try {  // the Clipboard API needs HTTPS; fall back to a hidden text box on plain HTTP
+      if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); ok = true; }
+    } catch (e) { ok = false; }
+    if (!ok) {
+      const box = document.createElement("textarea");
+      box.value = text;
+      box.setAttribute("readonly", "");
+      box.style.cssText = "position:fixed;top:-1000px;opacity:0";
+      document.body.appendChild(box);
+      box.select();
+      try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      box.remove();
+    }
+    const btn = $("copy");
+    $("copied").textContent = ok ? "Copied" : "Press Ctrl+C";
+    $("copied").classList.remove("hidden");
+    btn.classList.toggle("done", ok);
+    if (!ok) {  // select the address so the user can copy it by hand
+      const range = document.createRange();
+      range.selectNodeContents($("url"));
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+    }
+    clearTimeout(copyUrl.timer);
+    copyUrl.timer = setTimeout(() => { $("copied").classList.add("hidden"); btn.classList.remove("done"); }, 1800);
+  }
+  $("copy").onclick = copyUrl;
 
   document.addEventListener("keydown", e => {
     if (!state.info || state.mode === "gallery") return;
