@@ -7,7 +7,7 @@
 <style>
   :root {
     --bg: #060912; --bg2: #0a1120; --card: rgba(255,255,255,.05); --line: rgba(255,255,255,.12);
-    --text: #ecf1f7; --muted: #808ea2; --cyan: #00e5ff; --solar: #ffc400;
+    --text: #ecf1f7; --muted: #808ea2; --cyan: #00e5ff; --green: #00e882;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; min-height: 100%; }
@@ -28,32 +28,44 @@
   button {
     background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 999px;
     padding: 7px 13px; font: inherit; font-size: 13px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
   }
   button:hover { border-color: rgba(0,229,255,.5); }
   button[aria-pressed="true"] { background: rgba(0,229,255,.14); border-color: var(--cyan); color: #fff; }
-  .viewer { display: grid; place-items: center; background: var(--card); border: 1px solid var(--line);
-            border-radius: 16px; padding: 12px; min-height: 240px; }
-  .viewer img { display: block; max-width: 100%; max-height: calc(100vh - 230px); border-radius: 10px; }
+  button svg { width: 15px; height: 15px; flex: none; }
+  .ico { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .solid { fill: currentColor; }
+  button.play[aria-pressed="true"] { background: rgba(0,232,130,.14); border-color: var(--green); }
+  .viewer { position: relative; display: grid; place-items: center; background: var(--card);
+            border: 1px solid var(--line); border-radius: 16px; padding: 12px; min-height: 240px; overflow: hidden; }
+  .viewer img { display: block; max-width: 100%; max-height: calc(100vh - 240px); border-radius: 10px; }
+  .progress { position: absolute; left: 0; bottom: 0; height: 3px; width: 0; background: var(--green); }
+  .progress.run { transition: width linear; }
   .meta { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between;
           margin-top: 10px; color: var(--muted); font-size: 13px; }
-  .meta code { color: var(--text); background: rgba(255,255,255,.06); padding: 3px 8px; border-radius: 6px;
-               word-break: break-all; }
+  code { color: var(--text); background: rgba(255,255,255,.06); padding: 3px 8px; border-radius: 6px;
+         word-break: break-all; font-size: 12.5px; }
   .url { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
-  button.copy { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border-radius: 8px; flex: none; }
-  button.copy svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  button.copy.done { border-color: #00e882; color: #00e882; }
+  button.copy { padding: 5px 9px; border-radius: 8px; flex: none; }
+  button.copy.done { border-color: var(--green); color: var(--green); }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 14px; }
-  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px; cursor: pointer;
-          text-align: left; color: inherit; }
-  .tile img { width: 100%; height: auto; border-radius: 8px; display: block; background: #000; }
-  .tile span { display: block; margin-top: 8px; font-size: 13px; color: var(--muted); }
-  .tile span b { color: var(--text); font-weight: 600; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px; }
+  .tile img { width: 100%; height: auto; border-radius: 8px; display: block; background: #000; cursor: pointer; }
+  .tile img:hover { outline: 1px solid rgba(0,229,255,.5); }
+  .tile .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+  .tile b { font-size: 13px; font-weight: 600; }
   .hidden { display: none !important; }
   .note { color: var(--muted); font-size: 12px; margin-top: 18px; }
   @media (max-width: 600px) { h1 { font-size: 20px; } .viewer img { max-height: none; } }
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-copy" viewBox="0 0 24 24"><g class="ico"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></g></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path class="ico" d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path class="solid" d="M7 4.5v15l13-7.5z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect class="solid" x="6" y="4.5" width="4" height="15" rx="1"/><rect class="solid" x="14" y="4.5" width="4" height="15" rx="1"/></symbol>
+</svg>
 <header>
   <div>
     <div class="brand">INNOVO</div>
@@ -73,25 +85,24 @@
     <div class="group" id="sizes"></div>
     <span class="label">Mode</span>
     <div class="group" id="modes"></div>
+    <button id="play" class="play" type="button" aria-pressed="false" title="Play the screens one after another (Space)"></button>
   </div>
 
   <section id="single">
-    <div class="viewer"><img id="screen" alt=""></div>
+    <div class="viewer"><img id="screen" alt=""><div class="progress" id="progress"></div></div>
     <div class="meta">
       <span id="caption"></span>
       <span class="url">
         <code id="url"></code>
-        <button id="copy" class="copy" type="button" title="Copy address" aria-label="Copy address">
-          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
-          <span id="copied" class="hidden">Copied</span>
-        </button>
+        <button id="copy" class="copy" type="button" title="Copy address" aria-label="Copy address"></button>
       </span>
     </div>
   </section>
   <section id="gallery" class="grid hidden"></section>
 
   <p class="note">Screens refresh by themselves every minute (other shapes every 2 minutes).
-    Use the address shown under the picture in a controller; add <code>?t=</code> plus the time so it is never cached.</p>
+    Use an address in a controller with <code>?t=</code> plus the time added, so it is never cached.
+    Keys: ← → change view, Space play / pause.</p>
 </main>
 
 <script>
@@ -101,94 +112,22 @@
     "live": "Live", "today": "Today", "battery": "Battery", "money": "Money", "solar": "Solar Health", "week": "Week",
   };
   const SHAPE_NAMES = { "1x1": "Square", "16x9": "16:9", "4x3": "4:3", "9x10": "9:10", "9x16": "9:16" };
-  const store = (k, v) => { try { v === undefined ? 0 : localStorage.setItem("ise." + k, v); return localStorage.getItem("ise." + k); } catch (e) { return null; } };
-  const state = { view: store("view") || "overview", shape: store("shape") || "1x1", res: store("res") || "lowres",
-                  mode: store("mode") || "single", info: null, slide: null };
+  const PLAY_SECONDS = 8;
+  const save = (k, v) => { try { localStorage.setItem("ise." + k, v); } catch (e) {} };
+  const load = k => { try { return localStorage.getItem("ise." + k); } catch (e) { return null; } };
+  const state = { view: load("view") || "overview", shape: load("shape") || "1x1", res: load("res") || "lowres",
+                  mode: load("mode") === "gallery" ? "gallery" : "single", playing: false, info: null, timer: null };
   const $ = id => document.getElementById(id);
+  const icon = name => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
   const file = (view, shape, res) => `${view}-${shape}-${res}.jpg`;
+  const address = name => new URL(name, location.href).href;
   const bust = () => `?t=${Math.floor(Date.now() / 1000)}`;
+  const title = view => TITLES[view] || view;
 
-  function buttons(el, items, current, onPick) {
-    el.innerHTML = "";
-    for (const [value, text] of items) {
-      const b = document.createElement("button");
-      b.textContent = text;
-      b.setAttribute("aria-pressed", String(value === current));
-      b.onclick = () => onPick(value);
-      el.appendChild(b);
-    }
-  }
-
-  function draw() {
-    const info = state.info;
-    if (!info) return;
-    if (!info.pages.includes(state.view)) state.view = info.pages[0];
-    if (!info.shapes[state.shape]) state.shape = "1x1";
-    buttons($("views"), info.pages.map(p => [p, TITLES[p] || p]), state.view, v => pick("view", v));
-    buttons($("shapes"), Object.keys(info.shapes).map(s => [s, SHAPE_NAMES[s] || s]), state.shape, v => pick("shape", v));
-    buttons($("sizes"), [["lowres", "Low-res"], ["hires", "Hi-res"]], state.res, v => pick("res", v));
-    buttons($("modes"), [["single", "Single"], ["gallery", "All views"], ["slideshow", "Slideshow"]], state.mode, v => pick("mode", v));
-    const gallery = state.mode === "gallery";
-    $("single").classList.toggle("hidden", gallery);
-    $("gallery").classList.toggle("hidden", !gallery);
-    gallery ? drawGallery() : drawSingle();
-  }
-
-  function drawSingle() {
-    const name = file(state.view, state.shape, state.res);
-    $("screen").src = name + bust();
-    $("screen").alt = `${TITLES[state.view] || state.view} screen`;
-    const size = state.info.shapes[state.shape][state.res];
-    $("caption").textContent = `${TITLES[state.view] || state.view} · ${SHAPE_NAMES[state.shape] || state.shape} · ${size}`;
-    $("url").textContent = new URL(name, location.href).href;
-  }
-
-  function drawGallery() {
-    const g = $("gallery");
-    g.innerHTML = "";
-    for (const view of state.info.pages) {
-      const t = document.createElement("button");
-      t.className = "tile";
-      t.innerHTML = `<img alt="" loading="lazy"><span><b></b></span>`;
-      t.querySelector("img").src = file(view, state.shape, "lowres") + bust();
-      t.querySelector("b").textContent = TITLES[view] || view;
-      t.onclick = () => { state.view = view; store("view", view); pick("mode", "single"); };
-      g.appendChild(t);
-    }
-  }
-
-  function pick(key, value) {
-    state[key] = value;
-    store(key, value);
-    clearInterval(state.slide);
-    state.slide = null;
-    if (state.mode === "slideshow") {
-      state.slide = setInterval(() => {
-        const p = state.info.pages;
-        state.view = p[(p.indexOf(state.view) + 1) % p.length];
-        draw();
-      }, 10000);
-    }
-    draw();
-  }
-
-  async function load() {
-    try {
-      const r = await fetch("screens.json" + bust(), { cache: "no-store" });
-      if (!r.ok) throw new Error(r.status);
-      state.info = await r.json();
-      const when = state.info.updated ? new Date(state.info.updated) : null;
-      $("status").innerHTML = when ? `Updated <b>${when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</b>` : "";
-    } catch (e) {
-      $("status").textContent = "The energy screens are not available right now.";
-    }
-    draw();
-  }
-
-  async function copyUrl() {
-    const text = $("url").textContent;
+  // ---- copy (Clipboard API needs HTTPS; fall back to a hidden text box on plain HTTP) ----
+  async function copyText(text, button) {
     let ok = false;
-    try {  // the Clipboard API needs HTTPS; fall back to a hidden text box on plain HTTP
+    try {
       if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); ok = true; }
     } catch (e) { ok = false; }
     if (!ok) {
@@ -201,31 +140,150 @@
       try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
       box.remove();
     }
-    const btn = $("copy");
-    $("copied").textContent = ok ? "Copied" : "Press Ctrl+C";
-    $("copied").classList.remove("hidden");
-    btn.classList.toggle("done", ok);
-    if (!ok) {  // select the address so the user can copy it by hand
-      const range = document.createRange();
-      range.selectNodeContents($("url"));
-      getSelection().removeAllRanges();
-      getSelection().addRange(range);
-    }
-    clearTimeout(copyUrl.timer);
-    copyUrl.timer = setTimeout(() => { $("copied").classList.add("hidden"); btn.classList.remove("done"); }, 1800);
+    if (!ok) { window.prompt("Copy this address:", text); return; }
+    button.classList.add("done");
+    button.innerHTML = icon("check") + "<span>Copied</span>";
+    clearTimeout(button.timer);
+    button.timer = setTimeout(() => { button.classList.remove("done"); button.innerHTML = icon("copy"); }, 1600);
   }
-  $("copy").onclick = copyUrl;
 
+  function copyButton(getText) {
+    const b = document.createElement("button");
+    b.className = "copy"; b.type = "button"; b.title = "Copy address"; b.setAttribute("aria-label", "Copy address");
+    b.innerHTML = icon("copy");
+    b.onclick = e => { e.stopPropagation(); copyText(getText(), b); };
+    return b;
+  }
+
+  // ---- drawing ----
+  function buttons(el, items, current, onPick) {
+    el.innerHTML = "";
+    for (const [value, text] of items) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = text;
+      b.setAttribute("aria-pressed", String(value === current));
+      b.onclick = () => onPick(value);
+      el.appendChild(b);
+    }
+  }
+
+  function draw() {
+    const info = state.info;
+    if (!info) return;
+    if (!info.pages.includes(state.view)) state.view = info.pages[0];
+    if (!info.shapes[state.shape]) state.shape = "1x1";
+    buttons($("views"), info.pages.map(p => [p, title(p)]), state.view, v => pick("view", v));
+    buttons($("shapes"), Object.keys(info.shapes).map(s => [s, SHAPE_NAMES[s] || s]), state.shape, v => pick("shape", v));
+    buttons($("sizes"), [["lowres", "Low-res"], ["hires", "Hi-res"]], state.res, v => pick("res", v));
+    buttons($("modes"), [["single", "Single"], ["gallery", "All views"]], state.mode, v => pick("mode", v));
+    $("play").setAttribute("aria-pressed", String(state.playing));
+    $("play").innerHTML = state.playing ? icon("pause") + "<span>Pause</span>" : icon("play") + "<span>Play</span>";
+    const gallery = state.mode === "gallery";
+    $("single").classList.toggle("hidden", gallery);
+    $("gallery").classList.toggle("hidden", !gallery);
+    gallery ? drawGallery() : drawSingle();
+  }
+
+  function drawSingle() {
+    const name = file(state.view, state.shape, state.res);
+    $("screen").src = name + bust();
+    $("screen").alt = `${title(state.view)} screen`;
+    const size = state.info.shapes[state.shape][state.res];
+    $("caption").textContent = `${title(state.view)} · ${SHAPE_NAMES[state.shape] || state.shape} · ${size}`;
+    $("url").textContent = address(name);
+  }
+
+  function drawGallery() {
+    const g = $("gallery");
+    g.innerHTML = "";
+    for (const view of state.info.pages) {
+      const tile = document.createElement("div");
+      tile.className = "tile";
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.alt = `${title(view)} screen`;
+      img.src = file(view, state.shape, "lowres") + bust();
+      img.title = "Open";
+      img.onclick = () => { state.view = view; save("view", view); pick("mode", "single"); };
+      const row = document.createElement("div");
+      row.className = "row";
+      const name = document.createElement("b");
+      name.textContent = title(view);
+      row.append(name, copyButton(() => address(file(view, state.shape, state.res))));
+      tile.append(img, row);
+      g.appendChild(tile);
+    }
+  }
+
+  // ---- play (cycle the views) ----
+  function restartProgress() {
+    const bar = $("progress");
+    bar.classList.remove("run");
+    bar.style.width = "0";
+    if (!state.playing) return;
+    void bar.offsetWidth;  // restart the CSS transition
+    bar.style.transitionDuration = PLAY_SECONDS + "s";
+    bar.classList.add("run");
+    bar.style.width = "100%";
+  }
+
+  function next(step = 1) {
+    const p = state.info.pages;
+    state.view = p[(p.indexOf(state.view) + step + p.length) % p.length];
+    save("view", state.view);
+  }
+
+  function setPlaying(on) {
+    state.playing = on;
+    clearInterval(state.timer);
+    state.timer = null;
+    if (on) {
+      if (state.mode === "gallery") { state.mode = "single"; save("mode", "single"); }
+      state.timer = setInterval(() => { next(); draw(); restartProgress(); }, PLAY_SECONDS * 1000);
+    }
+    draw();
+    restartProgress();
+  }
+
+  function pick(key, value) {
+    state[key] = value;
+    save(key, value);
+    if (key === "mode" && value === "gallery" && state.playing) { setPlaying(false); return; }
+    draw();
+    if (state.playing) setPlaying(true);  // restart the timer from the picked view
+  }
+
+  // ---- data ----
+  async function refresh() {
+    try {
+      const r = await fetch("screens.json" + bust(), { cache: "no-store" });
+      if (!r.ok) throw new Error(r.status);
+      state.info = await r.json();
+      const when = state.info.updated ? new Date(state.info.updated) : null;
+      $("status").innerHTML = when ? `Updated <b>${when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</b>` : "";
+    } catch (e) {
+      $("status").textContent = "The energy screens are not available right now.";
+    }
+    if (!state.playing) draw();  // while playing, the next slide picks up the new data
+  }
+
+  $("copy").innerHTML = icon("copy");
+  $("copy").onclick = () => copyText($("url").textContent, $("copy"));
+  $("play").onclick = () => setPlaying(!state.playing);
   document.addEventListener("keydown", e => {
-    if (!state.info || state.mode === "gallery") return;
-    const p = state.info.pages, i = p.indexOf(state.view);
-    if (e.key === "ArrowRight") pick("view", p[(i + 1) % p.length]);
-    if (e.key === "ArrowLeft") pick("view", p[(i - 1 + p.length) % p.length]);
+    if (!state.info || e.target.closest("input, textarea")) return;
+    if (e.key === " ") { e.preventDefault(); setPlaying(!state.playing); return; }
+    if (state.mode === "gallery") return;
+    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+      next(e.key === "ArrowRight" ? 1 : -1);
+      draw();
+      if (state.playing) setPlaying(true);
+    }
   });
 
-  load();
-  if (state.mode === "slideshow") pick("mode", "slideshow");
-  setInterval(load, 60000);
+  refresh();
+  setInterval(refresh, 60000);
 })();
 </script>
 </body>
