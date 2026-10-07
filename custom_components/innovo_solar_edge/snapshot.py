@@ -87,6 +87,8 @@ def screen_data(model) -> dict:
         "inverter_kw": model.inverter_kw,
         "typical_today": v.get("typical_today"),
         "today_vs_typical": v.get("today_vs_typical"),
+        # the flow lines' pattern moves a quarter step each minute, so every refresh differs
+        "_phase": (now.hour * 60 + now.minute) % 4 / 4,
     }
 
     series = model.data.get("series") or {}

@@ -50,6 +50,17 @@ BATT2 = (0, 200, 255)
 RED = (255, 82, 102)
 GREEN = BATT
 MAGENTA = (255, 64, 200)
+# set per theme (see themes.py); these are the "neon-dark" values
+INK = (255, 255, 255)            # lines, tracks and grids drawn over the background
+NODE = (14, 20, 34)              # fill of the flow-diagram circles
+CARD_FILL = (255, 255, 255, 12)
+CARD_LINE = (255, 255, 255, 30)
+CARD_STYLE = "glass"
+RADIUS = 1.0
+TEXTURE = "dots"
+WASHES = ((0, 20, 38), (22, 8, 40))
+GLOW = 1.0
+FONT_SCALE = 1.0
 
 FONT_DIR = os.path.join(os.path.dirname(__file__), "fonts")
 FALLBACK = {
@@ -59,16 +70,114 @@ FALLBACK = {
 }
 WEIGHT_FILE = {"bold": "Rajdhani-Bold.ttf", "semi": "Rajdhani-SemiBold.ttf", "medium": "Rajdhani-Medium.ttf"}
 
+_THEME_LOCK = threading.RLock()  # renders swap the module colours, one theme at a time
+_THEME = None
 
-@lru_cache(maxsize=64)
+
+def apply_theme(key: str | None) -> None:
+    """Swap in a theme-mode's colours, fonts and styles (see themes.py)."""
+    global _THEME
+    try:
+        from .themes import resolve
+    except ImportError:  # loaded on its own (tests)
+        from themes import resolve
+    globals().update(resolve(key))
+    _THEME = key
+
+
+def themed(fn):
+    """Run a render with the theme named in data["_theme"] (default: neon-dark)."""
+    def wrapper(page, data, *args, **kwargs):
+        with _THEME_LOCK:
+            previous = _THEME
+            apply_theme(data.get("_theme"))
+            try:
+                return fn(page, data, *args, **kwargs)
+            finally:
+                apply_theme(previous)
+    wrapper.__name__, wrapper.__doc__ = fn.__name__, fn.__doc__
+    return wrapper
+
+
 def font(size: int, weight: str = "semi"):
-    path = os.path.join(FONT_DIR, WEIGHT_FILE[weight])
+    return _font(WEIGHT_FILE[weight], max(round(size * FONT_SCALE * SS), 2), weight)
+
+
+@lru_cache(maxsize=256)
+def _font(file: str, px: int, weight: str):
+    path = os.path.join(FONT_DIR, file)
     if os.path.exists(path):
-        return ImageFont.truetype(path, size * SS)
+        return ImageFont.truetype(path, px)
     for alt in FALLBACK[weight]:
         if os.path.exists(alt):
-            return ImageFont.truetype(alt, int(size * SS * 0.85))
-    return ImageFont.load_default(size=size * SS)
+            return ImageFont.truetype(alt, int(px * 0.85))
+    return ImageFont.load_default(size=px)
+
+
+def _resample(pts, step):
+    """Points every `step` units along a polyline."""
+    seg = [math.dist(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
+    total, out, i, acc, d = sum(seg), [], 0, 0.0, 0.0
+    while d <= total and seg:
+        while i < len(seg) - 1 and acc + seg[i] < d:
+            acc += seg[i]
+            i += 1
+        t = (d - acc) / seg[i] if seg[i] else 0
+        (x0, y0), (x1, y1) = pts[i], pts[i + 1]
+        out.append((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t))
+        d += step
+    return out
+
+
+def draw_background(img, d, g, header, origin=(0, 0)):
+    """The theme's background on a 2x-size image: gradient, colour washes and texture.
+    g draws on the half-size glow layer; header (x0, y0, x1, y1) is kept free of texture;
+    origin aligns the texture with a page placed at that point (wider/taller shapes)."""
+    w, h = img.size
+    for y in range(0, h, 4):
+        d.rectangle([0, y, w, y + 4], fill=mix(BG_TOP, BG_BOTTOM, y / h))
+    wash1, wash2 = WASHES
+    gw, gh = w // 2, h // 2
+    blobs = [((-80, -100, 240, 180), wash1), ((gw - 180, gh - 180, gw + 120, gh + 120), wash2)]
+    if TEXTURE == "aurora":
+        blobs += [((gw * 0.15, gh * 0.30, gw * 0.75, gh * 0.75), wash2), ((gw * 0.45, -60, gw * 1.05, gh * 0.4), wash1)]
+    if GLOW:
+        for box, colour in blobs:
+            g.ellipse(box, fill=colour)
+    else:  # light themes: soft tinted clouds instead of glow
+        for box, colour in blobs:
+            mask = Image.new("L", (gw // 2, gh // 2), 0)
+            ImageDraw.Draw(mask).ellipse([v / 2 for v in box], fill=150)
+            mask = mask.filter(ImageFilter.GaussianBlur(40)).resize((w, h), Image.BILINEAR)
+            img.paste(colour, (0, 0), mask)
+    ox, oy = origin
+    hx0, hy0, hx1, hy1 = header
+
+    def free(x, y):
+        return not (hx0 <= x < hx1 and hy0 <= y < hy1)
+
+    if TEXTURE == "dots":
+        step = 24 * SS
+        for x in range((ox + step) % step or step, w, step):
+            for y in range((oy + 84 * SS) % step, h - 20 * SS, step):
+                if free(x, y):
+                    d.point([(x, y)], fill=INK + (26,))
+    elif TEXTURE == "scanlines":
+        for y in range(0, h, 3 * SS):
+            d.line([(0, y), (w, y)], fill=(0, 0, 0, 70 if GLOW else 14), width=SS)
+    elif TEXTURE == "grid":
+        for minor, alpha in ((12 * SS, 14), (60 * SS, 30)):
+            for x in range(ox % minor, w, minor):
+                d.line([(x, 0), (x, h)], fill=INK + (alpha,), width=1 if alpha < 20 else SS)
+            for y in range(oy % minor, h, minor):
+                d.line([(0, y), (w, y)], fill=INK + (alpha,), width=1 if alpha < 20 else SS)
+    elif TEXTURE == "grain":
+        import random
+
+        rnd = random.Random(7)
+        for _ in range(w * h // 260):
+            x, y = rnd.randrange(w), rnd.randrange(h)
+            d.point([(x, y)], fill=((255, 240, 210) if rnd.random() < 0.5 else (0, 0, 0)) + (rnd.randrange(8, 26),))
 
 
 def mix(a, b, t):
@@ -172,8 +281,29 @@ class Canvas:
             self.g.ellipse(gb, outline=outline or fill, width=int(glow))
 
     def card(self, x, y, w, h, radius=16, accent=None):
-        self.d.rounded_rectangle([x * SS, y * SS, (x + w) * SS, (y + h) * SS], radius=radius * SS,
-                                 fill=(255, 255, 255, 12), outline=(255, 255, 255, 30), width=SS)
+        box = [x * SS, y * SS, (x + w) * SS, (y + h) * SS]
+        r = radius * RADIUS * SS
+        if CARD_STYLE == "flat":
+            self.d.rounded_rectangle(box, radius=r, fill=CARD_FILL)
+        elif CARD_STYLE == "outline":
+            self.d.rounded_rectangle(box, radius=r, fill=CARD_FILL, outline=CARD_LINE, width=int(1.4 * SS))
+        elif CARD_STYLE == "plate":  # double rule and corner rivets
+            self.d.rounded_rectangle(box, radius=r, fill=CARD_FILL, outline=CARD_LINE, width=int(1.6 * SS))
+            inner = CARD_LINE[:3] + (CARD_LINE[3] // 2,)
+            self.d.rounded_rectangle([b + (5 if i < 2 else -5) * SS for i, b in enumerate(box)], radius=max(r - 4 * SS, 0),
+                                     outline=inner, width=SS)
+            for cx, cy in ((x + 9, y + 9), (x + w - 9, y + 9), (x + 9, y + h - 9), (x + w - 9, y + h - 9)):
+                self.circle(cx, cy, 2.6, fill=CYAN + (220,))
+                self.circle(cx - 0.7, cy - 0.7, 0.9, fill=mix(CYAN, (255, 255, 255), 0.6) + (230,))
+        elif CARD_STYLE == "console":  # side bar + top bar, rounded like a starship console
+            self.d.rounded_rectangle([x * SS, y * SS, (x + 10) * SS, (y + h) * SS], radius=5 * SS, fill=CYAN + (255,))
+            self.d.rounded_rectangle([x * SS, y * SS, (x + w * 0.4) * SS, (y + 7) * SS], radius=3.5 * SS, fill=CYAN + (255,))
+            self.d.rounded_rectangle([(x + w * 0.4 + 6) * SS, y * SS, (x + w - 30) * SS, (y + 7) * SS], radius=3.5 * SS,
+                                     fill=HOME + (255,))
+            self.d.rounded_rectangle([(x + w - 24) * SS, y * SS, (x + w) * SS, (y + 7) * SS], radius=3.5 * SS,
+                                     fill=MUTED + (255,))
+        else:  # glass
+            self.d.rounded_rectangle(box, radius=r, fill=CARD_FILL, outline=CARD_LINE, width=SS)
         if accent:
             self.d.rounded_rectangle([x * SS, (y + 10) * SS, (x + 3) * SS, (y + h - 10) * SS],
                                      radius=2 * SS, fill=accent + (255,))
@@ -183,7 +313,7 @@ class Canvas:
         """Gradient arc from angle start to end (degrees, 0 = east, clockwise)."""
         box = [(cx - r) * SS, (cy - r) * SS, (cx + r) * SS, (cy + r) * SS]
         if track:
-            self.d.arc(box, 0, 360, fill=(255, 255, 255, 18), width=int(width * SS))
+            self.d.arc(box, 0, 360, fill=INK + (18,), width=int(width * SS))
         if end <= start:
             return
         steps = max(int((end - start) / 2), 1)
@@ -202,27 +332,29 @@ class Canvas:
                 for t in (i / n for i in range(n + 1))]
 
     def flow(self, pts, color, watts, reverse=False):
-        """A connector; active flows get a glowing core and 'particles' showing direction."""
+        """A connector. Active flows carry a repeating dark -> mid -> bright -> light step
+        pattern in the direction of flow: a still picture that reads as moving (the
+        peripheral drift illusion). data["_phase"] shifts the pattern on each refresh."""
         active = watts is not None and watts > 50
         if len(pts) == 2:
             (x0, y0), (x1, y1) = pts
             pts = [(x0 + (x1 - x0) * i / 40, y0 + (y1 - y0) * i / 40) for i in range(41)]
-        self.line(pts, (255, 255, 255), 2, alpha=22)
+        self.line(pts, INK, 2, alpha=22)
         if not active:
             return
-        width = 2 + min(watts / 1500, 3)
-        self.line(pts, color, width, glow=6 + width * 2, alpha=200)
         path = list(reversed(pts)) if reverse else pts
-        n = len(path)
-        for k in range(1, 6):  # particles with fading trail
-            idx = int(n * k / 6)
-            for trail in range(4):
-                j = max(idx - trail * 2, 0)
-                x, y = path[j]
-                r = 4.5 - trail
-                self.circle(x, y, r, fill=mix(color, (255, 255, 255), 0.5 if trail == 0 else 0) + (255 - trail * 60,))
-            x, y = path[idx]
-            self.g.ellipse([(x - 6) * SS / 2, (y - 6) * SS / 2, (x + 6) * SS / 2, (y + 6) * SS / 2], fill=color)
+        width = 2.6 + min(watts / 1500, 2.4)
+        self.line(path, color, width + 2, glow=4 + width, alpha=35)  # soft bed under the pattern
+        width += 1.6
+        seg = 7.0
+        steps = (mix(BG_TOP, color, 0.08), mix(BG_TOP, color, 0.55),
+                 mix(color, (255, 255, 255), 0.85), mix(color, (255, 255, 255), 0.30))
+        dense = _resample(path, 1.0)
+        offset = (self.data.get("_phase") or 0) % 1 * seg * len(steps)
+        for k in range(len(dense) - 1):
+            col = steps[int((k + offset) // seg) % len(steps)]
+            self.d.line([(dense[k][0] * SS, dense[k][1] * SS), (dense[k + 1][0] * SS, dense[k + 1][1] * SS)],
+                        fill=col + (255,), width=int(width * SS))
 
     # --- icons (centered at cx, cy, size s) ---
 
@@ -263,17 +395,7 @@ class Canvas:
     # --- frame ---
 
     def _background(self):
-        ph = self.H * SS
-        for y in range(0, ph, 4):
-            self.d.rectangle([0, y, self.W * SS, y + 4], fill=mix(BG_TOP, BG_BOTTOM, y / ph))
-        # soft colour washes (top-left, bottom-right)
-        gw, gh = self.W * SS // 2, self.H * SS // 2
-        self.g.ellipse([-80, -100, 240, 180], fill=(0, 20, 38))
-        self.g.ellipse([gw - 180, gh - 180, gw + 120, gh + 120], fill=(22, 8, 40))
-        # dot grid
-        for x in range(24, self.W, 24):
-            for y in range(84, self.H - 20, 24):
-                self.d.point([(x * SS, y * SS)], fill=(255, 255, 255, 26))
+        draw_background(self.img, self.d, self.g, (0, 0, self.W * SS, 84 * SS))
 
     def _header(self, page):
         self.text((24, 18), "INNOVO", 13, CYAN, "bold", spacing=4)
@@ -284,11 +406,15 @@ class Canvas:
         self.text((right, 54), now.strftime("%a %d %b").upper(), 13, MUTED, "semi", anchor="ra", spacing=1)
         if self.data.get("_bare"):  # template screens: time stamp only, no status or data
             return
-        status = self.data.get("inverter") or "Waiting"
-        col = BATT if status == "Producing" else RED if status.startswith(("Fault", "Offline")) else MUTED
-        self.circle(self.W - 170, 40, 4, fill=col + (255,), glow=0)
-        self.g.ellipse([(self.W - 178) * SS / 2, 32 * SS / 2, (self.W - 162) * SS / 2, 48 * SS / 2], fill=col)
-        self.text((self.W - 160, 40), status.upper(), 13, col, "semi", anchor="lm", spacing=1)
+        status = (self.data.get("inverter") or "Waiting").upper()
+        col = BATT if status == "PRODUCING" else RED if status.startswith(("FAULT", "OFFLINE")) else MUTED
+        clock_w = self.d.textlength(now.strftime("%H:%M"), font=font(30, "bold")) / SS
+        f = font(13, "semi")
+        status_w = (sum(self.d.textlength(ch, font=f) for ch in status) + SS * (len(status) - 1)) / SS
+        sx = right - clock_w - 18 - status_w  # status sits left of the clock, whatever the font
+        self.circle(sx - 10, 40, 4, fill=col + (255,), glow=0)
+        self.g.ellipse([(sx - 18) * SS / 2, 32 * SS / 2, (sx - 2) * SS / 2, 48 * SS / 2], fill=col)
+        self.text((sx, 40), status, 13, col, "semi", anchor="lm", spacing=1)
         for x in range(24, self.W - 24, 2):
             t = (x - 24) / (self.W - 48)
             self.d.point([(x * SS, 76 * SS)], fill=mix(CYAN, HOME, t) + (int(160 * (1 - abs(t - 0.5) * 1.6)),))
@@ -305,17 +431,23 @@ class Canvas:
                 self.d.rounded_rectangle([(x - 9) * SS, (y - 3) * SS, (x + 9) * SS, (y + 3) * SS], radius=3 * SS, fill=CYAN + (255,))
                 self.g.line([((x - 9) * SS / 2, y * SS / 2), ((x + 9) * SS / 2, y * SS / 2)], fill=CYAN, width=4)
             else:
-                self.circle(x, y, 3, fill=(255, 255, 255, 60))
+                self.circle(x, y, 3, fill=INK + (60,))
+
+    def glow_layer(self) -> Image.Image:
+        glow = self.glow.filter(ImageFilter.GaussianBlur(9)).resize(self.img.size, Image.BILINEAR)
+        if GLOW != 1:
+            glow = glow.point(lambda v: min(int(v * GLOW), 255))
+        return glow
 
     def full(self) -> Image.Image:
         """The finished screen at the 2x working size (1440 x 1440)."""
-        glow = self.glow.filter(ImageFilter.GaussianBlur(9)).resize(self.img.size, Image.BILINEAR)
-        return ImageChops.screen(self.img, glow)
+        if not GLOW:  # light themes: no neon glow
+            return self.img.copy()
+        return ImageChops.screen(self.img, self.glow_layer())
 
     def png(self):
         if getattr(_RAW, "layers", False):  # transparent(): the crisp layer and the blurred glow
-            glow = self.glow.filter(ImageFilter.GaussianBlur(9)).resize(self.img.size, Image.BILINEAR)
-            return self.img, glow
+            return self.img, self.glow_layer()
         if getattr(_RAW, "on", False):  # render_image(): hand back the full-size picture
             return self.full()
         out = self.full().resize((self.W, self.H), Image.LANCZOS)
@@ -361,7 +493,7 @@ def _flow_diagram(cv, v, nodes, r=60, compact=False):
     def node(key, color, label, value, sub=None, sub_color=None, icon=None):
         x, y = nodes[key]
         cv.circle(x, y, r + (6 if compact else 10), fill=BG_TOP + (255,))
-        cv.circle(x, y, r, fill=(14, 20, 34, 255), outline=color + (255,), width=2 if compact else 2.5, glow=5 if compact else 6)
+        cv.circle(x, y, r, fill=NODE + (255,), outline=color + (255,), width=2 if compact else 2.5, glow=5 if compact else 6)
         icon(x, y - r * 0.5, isize)
         cv.text((x, y + r * 0.1), value, vsize, TEXT, "bold", anchor="mm")
         if not compact:
@@ -393,7 +525,7 @@ def _flow_diagram(cv, v, nodes, r=60, compact=False):
 def _sun_arc(cv, v, cx, cy, rx, ry, labels=True):
     sun = v.get("sun") or {}
     pts = [(cx + rx * math.cos(math.radians(a)), cy - ry * math.sin(math.radians(a))) for a in range(180, -1, -3)]
-    cv.line(pts, (255, 255, 255), 1.2, alpha=40)
+    cv.line(pts, INK, 1.2, alpha=40)
     frac = sun.get("progress")
     if frac is not None and 0 <= frac <= 1:
         done = [p for i, p in enumerate(pts) if i / (len(pts) - 1) <= frac]
@@ -435,7 +567,7 @@ def page_live(data: dict) -> bytes:
 def _axes_hours(cv, x, y, w, h, size=12):
     for hr in (0, 6, 12, 18, 24):
         gx = x + w * hr / 24
-        cv.line([(gx, y), (gx, y + h)], (255, 255, 255), 1, alpha=16)
+        cv.line([(gx, y), (gx, y + h)], INK, 1, alpha=16)
         cv.text((gx, y + h + 7), f"{hr:02d}", size, MUTED, "semi", anchor="mt")
 
 
@@ -453,7 +585,7 @@ def _power_chart(cv, v, x, y, w, h, compact=False, solar_only=False):
     _axes_hours(cv, x, y, w, h, 11 if compact else 12)
     for kw in range(1, int(peak / 1000) + 1):
         gy = Y(kw * 1000)
-        cv.line([(x, gy), (x + w, gy)], (255, 255, 255), 1, alpha=12)
+        cv.line([(x, gy), (x + w, gy)], INK, 1, alpha=12)
         if not compact:
             cv.text((x - 6, gy), f"{kw}", 11, DIM, "semi", anchor="rm")
 
@@ -645,7 +777,7 @@ def page_battery(data: dict) -> bytes:
         a = math.radians(i * 6 - 90)
         r1, r2 = r + 26, r + (34 if i % 5 == 0 else 30)
         cv.line([(cx + math.cos(a) * r1, cy + math.sin(a) * r1), (cx + math.cos(a) * r2, cy + math.sin(a) * r2)],
-                (255, 255, 255), 1.2, alpha=50 if i % 5 == 0 else 25)
+                INK, 1.2, alpha=50 if i % 5 == 0 else 25)
     cv.arc(cx, cy, r, -90, -90 + 360 * (level or 0) / 100, 26, BATT2, BATT, glow=12)
     reserve = v.get("reserve")
     if reserve is not None:
@@ -772,7 +904,7 @@ def page_money(data: dict) -> bytes:
     cv.text((676, 630), f"PAID {fmt_money(week_cost, cur)}", 30, TEXT, "bold", anchor="ra")
     if week_saved is not None and week_cost is not None and week_saved + week_cost > 0:
         share = week_saved / (week_saved + week_cost)
-        cv.d.rounded_rectangle([44 * SS, 672 * SS, 676 * SS, 678 * SS], radius=3 * SS, fill=(255, 255, 255, 25))
+        cv.d.rounded_rectangle([44 * SS, 672 * SS, 676 * SS, 678 * SS], radius=3 * SS, fill=INK + (25,))
         cv.d.rounded_rectangle([44 * SS, 672 * SS, (44 + 632 * share) * SS, 678 * SS], radius=3 * SS, fill=BATT + (255,))
         cv.g.line([(44 * SS / 2, 675 * SS / 2), ((44 + 632 * share) * SS / 2, 675 * SS / 2)], fill=BATT, width=4)
     return cv.png()
@@ -787,7 +919,7 @@ def page_solar(data: dict) -> bytes:
     span = min(max((eff or 0) / 130, 0), 1)
     cv.arc(cx, cy, r, 180, 360, 20, SOLAR2, SOLAR, glow=0, track=False)
     box = [(cx - r) * SS, (cy - r) * SS, (cx + r) * SS, (cy + r) * SS]
-    cv.d.arc(box, 180, 360, fill=(255, 255, 255, 22), width=20 * SS)
+    cv.d.arc(box, 180, 360, fill=INK + (22,), width=20 * SS)
     cv.arc(cx, cy, r, 180, 180 + 180 * span, 20, SOLAR2, SOLAR, glow=10, track=False)
     cv.glow_text((cx, cy - 22), "—" if eff is None else f"{eff:.0f}%", 64, TEXT, "bold")
     cv.text((cx, cy + 22), "OUTPUT VS SPEC", 12, MUTED, "semi", anchor="mm", spacing=2)
@@ -915,7 +1047,7 @@ def _solar_gauge(cv, v, cx, cy, r, width, big):
     solar = (v.get("solar_w") or 0) / 1000
     frac = min(solar / cap, 1) if cap else 0
     box = [(cx - r) * SS, (cy - r) * SS, (cx + r) * SS, (cy + r) * SS]
-    cv.d.arc(box, 135, 405, fill=(255, 255, 255, 22), width=int(width * SS))
+    cv.d.arc(box, 135, 405, fill=INK + (22,), width=int(width * SS))
     cv.arc(cx, cy, r, 135, 135 + 270 * frac, width, SOLAR2, SOLAR, glow=width * 0.6, track=False)
     cv.icon_sun(cx, cy - r * 0.42, r * 0.32)
     cv.glow_text((cx, cy + r * 0.02), f"{solar:.1f}", big, TEXT, "bold")
@@ -1185,7 +1317,7 @@ def page_placeholder(page: str, data: dict) -> bytes:
         a0 = i * 30 - 90
         col = mix(BG_BOTTOM, CYAN, (i + 1) / 12)
         cv.arc(cx, cy, 64, a0, a0 + 22, 8, col, col, glow=4 if i > 8 else 0, track=False)
-    cv.circle(cx, cy, 36, outline=(255, 255, 255, 40), width=1.5)
+    cv.circle(cx, cy, 36, outline=INK + (40,), width=1.5)
     for i, line in enumerate(PLACEHOLDER_TEXT):
         cv.text((cx, cy + 120 + i * 34), line, 24, TEXT if i == 0 else MUTED, "semi", anchor="mm")
     cv.text((cx, 610), "THIS PAGE REFRESHES AUTOMATICALLY", 12, DIM, "semi", anchor="mm", spacing=3)
@@ -1215,6 +1347,7 @@ SOLAR_ONLY = {
 }
 
 
+@themed
 def render(page: str, data: dict) -> bytes:
     if page == "battery" and data.get("has_battery") is False and data.get("inverter") is not None:
         return page_battery_none(data)
@@ -1242,6 +1375,7 @@ VARIANTS = {"overview-slot": "slot", "overview-flow": "flow"}
 JPEG_QUALITY = 88
 
 
+@themed
 def render_image(page: str, data: dict, backdrop: Image.Image | None = None,
                  shape: str = "1x1", layers: bool = False):
     """A page (or an overview variant) as a full-size picture (2x working size).
@@ -1266,29 +1400,21 @@ def has_layout(page: str, data: dict) -> bool:
 
 
 def _backdrop(width: int, height: int, x0: int, y0: int) -> Image.Image:
-    """The screens' background (gradient, colour washes, dot grid) at any shape, in the
-    2x working size; the dot grid lines up with a square page placed at (x0, y0)."""
+    """The theme's background at any shape, in the 2x working size, aligned with a
+    square page placed at (x0, y0)."""
     img = Image.new("RGB", (width, height), BG_TOP)
     d = ImageDraw.Draw(img, "RGBA")
-    for y in range(0, height, 4):
-        d.rectangle([0, y, width, y + 4], fill=mix(BG_TOP, BG_BOTTOM, y / height))
     glow = Image.new("RGB", (width // 2, height // 2), (0, 0, 0))
-    g = ImageDraw.Draw(glow)
-    gw, gh = glow.size  # the square's washes, moved to the corners of the whole picture
-    g.ellipse([-80, -100, 240, 180], fill=(0, 20, 38))
-    g.ellipse([gw - 180, gh - 180, gw + 120, gh + 120], fill=(22, 8, 40))
+    draw_background(img, d, ImageDraw.Draw(glow, "RGBA"), (x0, y0, x0 + C, y0 + 84 * SS), (x0, y0))
+    if not GLOW:
+        return img
     glow = glow.filter(ImageFilter.GaussianBlur(9)).resize((width, height), Image.BILINEAR)
-    img = ImageChops.screen(img, glow)
-    d = ImageDraw.Draw(img, "RGBA")
-    step = 24 * SS
-    for x in range(x0 % step, width, step):
-        for y in range(y0 + 84 * SS - ((y0 + 84 * SS) // step) * step, height - 20 * SS, step):
-            if x0 <= x < x0 + C and y0 <= y < y0 + 84 * SS:
-                continue  # keep the header area clear, as on the square
-            d.point([(x, y)], fill=(255, 255, 255, 26))
-    return img
+    if GLOW != 1:
+        glow = glow.point(lambda v: min(int(v * GLOW), 255))
+    return ImageChops.screen(img, glow)
 
 
+@themed
 def fit(page: str, data: dict, width: int, height: int, shape: str = "1x1") -> Image.Image:
     """A page at any shape, never stretched: pages with their own layout fill the
     whole picture; others are drawn at full height (or width) in the middle of the
@@ -1306,6 +1432,7 @@ def fit(page: str, data: dict, width: int, height: int, shape: str = "1x1") -> I
     return back.resize((width, height), Image.LANCZOS)
 
 
+@themed
 def transparent(page: str, data: dict, width: int, height: int, shape: str = "1x1") -> Image.Image:
     """A page with a transparent background (cards translucent, glows kept in colour),
     as RGBA at width x height. Drawn twice - on black and on white - and the
@@ -1351,6 +1478,7 @@ def jpeg(img: Image.Image) -> bytes:
     return buf.getvalue()
 
 
+@themed
 def export(page: str, data: dict, shapes=None, kinds=("jpg",)) -> dict[str, bytes]:
     """Every shape (or the given ones) and size of one page, as JPG and/or transparent
     PNG: {"overview-16x9-hires.jpg": bytes, "overview-16x9-hires.png": bytes, ...}."""
