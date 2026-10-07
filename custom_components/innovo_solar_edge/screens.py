@@ -14,6 +14,7 @@ import datetime
 import io
 import math
 import os
+import threading
 from functools import lru_cache
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
@@ -21,6 +22,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 SIZE = 720
 SS = 2  # supersampling
 C = SIZE * SS
+_RAW = threading.local()  # set by render_image(): pages return the full-size image
 
 PAGES = ["overview", "live", "today", "battery", "money", "solar", "week"]
 TITLES = {
@@ -119,13 +121,18 @@ def fmt_duration(hours) -> str | None:
 class Canvas:
     """2x canvas with a crisp layer and a half-resolution glow layer."""
 
-    def __init__(self, page: str, data: dict):
+    def __init__(self, page: str, data: dict, w: int = SIZE, h: int = SIZE):
         self.data = data
-        self.img = Image.new("RGB", (C, C), BG_TOP)
+        self.W, self.H = w, h  # size in 720-space units (the square is 720 x 720)
+        self.img = Image.new("RGB", (w * SS, h * SS), BG_TOP)
         self.d = ImageDraw.Draw(self.img, "RGBA")
-        self.glow = Image.new("RGB", (C // 2, C // 2), (0, 0, 0))
+        self.glow = Image.new("RGB", (w * SS // 2, h * SS // 2), (0, 0, 0))
         self.g = ImageDraw.Draw(self.glow, "RGBA")
-        self._background()
+        backdrop = getattr(_RAW, "bg", None)
+        if backdrop is not None:  # drawn on a slice of a wider/taller background (fit())
+            self.img.paste(backdrop)
+        else:
+            self._background()
         self._header(page)
         self._footer(page)
 
@@ -256,46 +263,59 @@ class Canvas:
     # --- frame ---
 
     def _background(self):
-        for y in range(0, C, 4):
-            self.d.rectangle([0, y, C, y + 4], fill=mix(BG_TOP, BG_BOTTOM, y / C))
-        # soft colour washes
+        ph = self.H * SS
+        for y in range(0, ph, 4):
+            self.d.rectangle([0, y, self.W * SS, y + 4], fill=mix(BG_TOP, BG_BOTTOM, y / ph))
+        # soft colour washes (top-left, bottom-right)
+        gw, gh = self.W * SS // 2, self.H * SS // 2
         self.g.ellipse([-80, -100, 240, 180], fill=(0, 20, 38))
-        self.g.ellipse([540, 540, 840, 840], fill=(22, 8, 40))
+        self.g.ellipse([gw - 180, gh - 180, gw + 120, gh + 120], fill=(22, 8, 40))
         # dot grid
-        for x in range(24, SIZE, 24):
-            for y in range(84, SIZE - 20, 24):
+        for x in range(24, self.W, 24):
+            for y in range(84, self.H - 20, 24):
                 self.d.point([(x * SS, y * SS)], fill=(255, 255, 255, 26))
 
     def _header(self, page):
         self.text((24, 18), "INNOVO", 13, CYAN, "bold", spacing=4)
         self.text((24, 34), TITLES[page], 30, TEXT, "bold", spacing=2)
+        if self.data.get("_bare"):  # template screens: no clock, status or data
+            return
         now = self.data["now"]
-        self.text((SIZE - 24, 20), now.strftime("%H:%M"), 30, TEXT, "bold", anchor="ra")
-        self.text((SIZE - 24, 54), now.strftime("%a %d %b").upper(), 13, MUTED, "semi", anchor="ra", spacing=1)
+        right = self.W - 24
+        self.text((right, 20), now.strftime("%H:%M"), 30, TEXT, "bold", anchor="ra")
+        self.text((right, 54), now.strftime("%a %d %b").upper(), 13, MUTED, "semi", anchor="ra", spacing=1)
         status = self.data.get("inverter") or "Waiting"
         col = BATT if status == "Producing" else RED if status.startswith(("Fault", "Offline")) else MUTED
-        self.circle(SIZE - 170, 40, 4, fill=col + (255,), glow=0)
-        self.g.ellipse([(SIZE - 178) * SS / 2, 32 * SS / 2, (SIZE - 162) * SS / 2, 48 * SS / 2], fill=col)
-        self.text((SIZE - 160, 40), status.upper(), 13, col, "semi", anchor="lm", spacing=1)
-        for x in range(24, SIZE - 24, 2):
-            t = (x - 24) / (SIZE - 48)
+        self.circle(self.W - 170, 40, 4, fill=col + (255,), glow=0)
+        self.g.ellipse([(self.W - 178) * SS / 2, 32 * SS / 2, (self.W - 162) * SS / 2, 48 * SS / 2], fill=col)
+        self.text((self.W - 160, 40), status.upper(), 13, col, "semi", anchor="lm", spacing=1)
+        for x in range(24, self.W - 24, 2):
+            t = (x - 24) / (self.W - 48)
             self.d.point([(x * SS, 76 * SS)], fill=mix(CYAN, HOME, t) + (int(160 * (1 - abs(t - 0.5) * 1.6)),))
 
     def _footer(self, page):
+        if self.data.get("_bare"):
+            return
         n = len(PAGES)
-        x0 = SIZE / 2 - (n - 1) * 9
+        x0 = self.W / 2 - (n - 1) * 9
+        y = self.H - 14
         for i, p in enumerate(PAGES):
             x = x0 + i * 18
             if p == page:
-                self.d.rounded_rectangle([(x - 9) * SS, 703 * SS, (x + 9) * SS, 709 * SS], radius=3 * SS, fill=CYAN + (255,))
-                self.g.line([((x - 9) * SS / 2, 706 * SS / 2), ((x + 9) * SS / 2, 706 * SS / 2)], fill=CYAN, width=4)
+                self.d.rounded_rectangle([(x - 9) * SS, (y - 3) * SS, (x + 9) * SS, (y + 3) * SS], radius=3 * SS, fill=CYAN + (255,))
+                self.g.line([((x - 9) * SS / 2, y * SS / 2), ((x + 9) * SS / 2, y * SS / 2)], fill=CYAN, width=4)
             else:
-                self.circle(x, 706, 3, fill=(255, 255, 255, 60))
+                self.circle(x, y, 3, fill=(255, 255, 255, 60))
 
-    def png(self) -> bytes:
-        glow = self.glow.filter(ImageFilter.GaussianBlur(9)).resize((C, C), Image.BILINEAR)
-        out = ImageChops.screen(self.img, glow)
-        out = out.resize((SIZE, SIZE), Image.LANCZOS)
+    def full(self) -> Image.Image:
+        """The finished screen at the 2x working size (1440 x 1440)."""
+        glow = self.glow.filter(ImageFilter.GaussianBlur(9)).resize(self.img.size, Image.BILINEAR)
+        return ImageChops.screen(self.img, glow)
+
+    def png(self):
+        if getattr(_RAW, "on", False):  # render_image(): hand back the full-size picture
+            return self.full()
+        out = self.full().resize((self.W, self.H), Image.LANCZOS)
         buf = io.BytesIO()
         out.save(buf, format="PNG", optimize=True)
         return buf.getvalue()
@@ -506,23 +526,92 @@ def page_today(data: dict) -> bytes:
     return cv.png()
 
 
-def page_overview(data: dict) -> bytes:
-    """Everything at a glance: flow, battery, today's chart and the key numbers."""
-    cv = Canvas("overview", data)
+# Overview layouts per screen shape, in 720-space units: canvas (w, h) and card boxes (x, y, w, h)
+OVERVIEW_LAYOUTS = {
+    "1x1": {"size": (720, 720), "flow": (24, 88, 420, 300), "battery": (456, 88, 240, 300),
+            "chart": (24, 400, 672, 176), "tiles": [(24 + i * 170, 588, 160, 102) for i in range(4)]},
+    "16x9": {"size": (1280, 720), "flow": (24, 88, 580, 300), "battery": (616, 88, 264, 300),
+             "chart": (24, 400, 1232, 290),
+             "tiles": [(892, 88, 176, 144), (1080, 88, 176, 144), (892, 244, 176, 144), (1080, 244, 176, 144)]},
+    "4x3": {"size": (960, 720), "flow": (24, 88, 560, 300), "battery": (596, 88, 340, 300),
+            "chart": (24, 400, 912, 176), "tiles": [(24 + i * 231, 588, 219, 102) for i in range(4)]},
+    "9x10": {"size": (720, 800), "flow": (24, 88, 420, 340), "battery": (456, 88, 240, 340),
+             "chart": (24, 440, 672, 216), "tiles": [(24 + i * 170, 668, 160, 102) for i in range(4)]},
+    "9x16": {"size": (720, 1280), "flow": (24, 88, 672, 420), "battery": (24, 520, 672, 280),
+             "chart": (24, 812, 672, 220),
+             "tiles": [(24, 1044, 330, 98), (366, 1044, 330, 98), (24, 1154, 330, 98), (366, 1154, 330, 98)]},
+}
+
+
+def page_overview(data: dict, variant: str | None = None, shape: str = "1x1") -> bytes:
+    """Everything at a glance: flow, battery, today's chart and the key numbers.
+
+    shape picks the layout (see OVERVIEW_LAYOUTS). Variants for controllers that
+    draw their own content on top: "slot" - the battery card is an empty frame;
+    "flow" - only the live flow; every other card is an empty frame, no clock.
+    """
+    lay = OVERVIEW_LAYOUTS[shape]
+    cv = Canvas("overview", {**data, "_bare": variant == "flow"}, *lay["size"])
     v, cur = data, data["currency"]
 
-    # flow (left)
-    cv.card(24, 88, 420, 300)
-    cv.text((40, 100), "LIVE FLOW", 11, MUTED, "semi", spacing=2)
-    _sun_arc(cv, v, 234, 168, 170, 52, labels=False)
-    _flow_diagram(cv, v, {"solar": (234, 170), "grid": (92, 268), "home": (376, 268), "battery": (234, 330)},
-                  r=36, compact=True)
+    # live flow
+    x, y, w, h = lay["flow"]
+    cv.card(x, y, w, h)
+    cv.text((x + 16, y + 12), "LIVE FLOW", 11, MUTED, "semi", spacing=2)
+    k = min(max(min(w / 420, h / 300), 1), 1.35)
+    cx = x + w / 2
+    _sun_arc(cv, v, cx, y + h * 0.267, w * 0.405, 52 * h / 300, labels=False)
+    _flow_diagram(cv, v, {"solar": (cx, y + h * 0.273), "grid": (x + 68 * k, y + h * 0.6),
+                          "home": (x + w - 68 * k, y + h * 0.6), "battery": (cx, y + h * 0.807)},
+                  r=36 * k, compact=True)
 
-    # battery (right)
+    # battery
+    cv.card(*lay["battery"])
+    if variant == "flow":  # empty frames where the other cards go
+        cv.card(*lay["chart"])
+        for tile in lay["tiles"]:
+            cv.card(*tile)
+        return cv.png()
+    if variant != "slot":
+        _overview_battery(cv, v, *lay["battery"])
+    t = v.get("today") or {}
+
+    # today chart
+    x, y, w, h = lay["chart"]
+    cv.card(x, y, w, h)
+    cv.text((x + 16, y + 12), "TODAY", 11, MUTED, "semi", spacing=2)
+    _legend(cv, x + 116, y + 12, (("SOLAR", SOLAR), ("HOME", HOME), ("GRID", GRID), ("BATT %", BATT)), 92)
+    cv.text((x + w - 16, y + 12), f"{t.get('solar') or 0:.1f} kWh SOLAR  ·  {v.get('house_today') or 0:.1f} kWh HOME",
+            11, MUTED, "semi", anchor="rm", spacing=1)
+    _power_chart(cv, v, x + 16, y + 36, w - 32, h - 72, compact=True)
+
+    # key numbers
+    pcol = period_color(v.get("period"))
+    eff = v.get("efficiency")
+    health = v.get("health") or "—"
+    clean = v.get("cleaning")
+    ss = v.get("self_sufficiency")
+    tiles = [
+        ("SAVED TODAY", fmt_money(v.get("saved_today"), cur), f"GRID {fmt_money(v.get('cost_today'), cur)}", BATT),
+        ("PRICE NOW", fmt_price(v.get("price"), cur), (v.get("period") or "").upper(), pcol),
+        ("SELF-SUFFICIENT", "—" if ss is None else f"{ss:.0f}%", f"BOUGHT {t.get('import') or 0:.1f} kWh", BATT),
+        ("PANELS VS SPEC", "—" if eff is None else f"{eff:.0f}%",
+         f"{health.upper()}{'  ·  CLEAN' if clean == 'Yes' else ''}", RED if clean == "Yes" else SOLAR),
+    ]
+    for (label, value, sub, col), (x, y, w, h) in zip(tiles, lay["tiles"]):
+        big = h >= 130
+        cv.card(x, y, w, h, accent=col)
+        cv.text((x + 16, y + 12), label, 11, MUTED, "semi", spacing=1)
+        cv.text((x + 16, y + (40 if big else 30)), value, 40 if big else 32, col, "bold")
+        cv.text((x + 16, y + h - 16), sub, 10, MUTED, "semi", anchor="ls", spacing=1)
+    return cv.png()
+
+
+def _overview_battery(cv, v, x, y, w, h):
     level = v.get("battery_level")
-    cv.card(456, 88, 240, 300)
-    cv.text((472, 100), "BATTERY", 11, MUTED, "semi", spacing=2)
-    bx, by, br = 576, 222, 76
+    cv.text((x + 16, y + 12), "BATTERY", 11, MUTED, "semi", spacing=2)
+    k = min(max(min(w / 240, h / 300), 0.8), 1.3)
+    bx, by, br = x + w / 2, y + h * 0.447, 76 * k
     cv.arc(bx, by, br, -90, -90 + 360 * (level or 0) / 100, 14, BATT2, BATT, glow=8)
     reserve = v.get("reserve")
     if reserve is not None:
@@ -537,39 +626,10 @@ def page_overview(data: dict) -> bytes:
     ttl = fmt_duration(v.get("time_to_full")) if (bw or 0) > 150 else fmt_duration(v.get("time_to_empty"))
     sub = (f"FULL IN {ttl}" if (bw or 0) > 150 else f"RESERVE IN {ttl}") if ttl else \
         ("" if bw is None else f"{abs(bw) / 1000:.1f} kW")
-    cv.text((bx, 334), sub, 13, MUTED, "semi", anchor="mm", spacing=1)
+    cv.text((bx, y + h * 0.82), sub, 13, MUTED, "semi", anchor="mm", spacing=1)
     t = v.get("today") or {}
-    cv.text((bx, 362), f"IN {t.get('charged') or 0:.1f}  ·  OUT {t.get('discharged') or 0:.1f} kWh", 11, DIM, "semi",
-            anchor="mm", spacing=1)
-
-    # today chart (middle)
-    cv.card(24, 400, 672, 176)
-    cv.text((40, 412), "TODAY", 11, MUTED, "semi", spacing=2)
-    _legend(cv, 140, 412, (("SOLAR", SOLAR), ("HOME", HOME), ("GRID", GRID), ("BATT %", BATT)), 92)
-    cv.text((680, 412), f"{t.get('solar') or 0:.1f} kWh SOLAR  ·  {v.get('house_today') or 0:.1f} kWh HOME", 11, MUTED,
-            "semi", anchor="rm", spacing=1)
-    _power_chart(cv, v, 40, 436, 640, 104, compact=True)
-
-    # key numbers (bottom)
-    pcol = period_color(v.get("period"))
-    eff = v.get("efficiency")
-    health = v.get("health") or "—"
-    clean = v.get("cleaning")
-    ss = v.get("self_sufficiency")
-    tiles = [
-        ("SAVED TODAY", fmt_money(v.get("saved_today"), cur), f"GRID {fmt_money(v.get('cost_today'), cur)}", BATT),
-        ("PRICE NOW", fmt_price(v.get("price"), cur), (v.get("period") or "").upper(), pcol),
-        ("SELF-SUFFICIENT", "—" if ss is None else f"{ss:.0f}%", f"BOUGHT {t.get('import') or 0:.1f} kWh", BATT),
-        ("PANELS VS SPEC", "—" if eff is None else f"{eff:.0f}%",
-         f"{health.upper()}{'  ·  CLEAN' if clean == 'Yes' else ''}", RED if clean == "Yes" else SOLAR),
-    ]
-    for i, (label, value, sub, col) in enumerate(tiles):
-        x = 24 + i * 170
-        cv.card(x, 588, 160, 102, accent=col)
-        cv.text((x + 16, 600), label, 11, MUTED, "semi", spacing=1)
-        cv.text((x + 16, 618), value, 32, col, "bold")
-        cv.text((x + 16, 674), sub, 10, MUTED, "semi", anchor="ls", spacing=1)
-    return cv.png()
+    cv.text((bx, y + h * 0.913), f"IN {t.get('charged') or 0:.1f}  ·  OUT {t.get('discharged') or 0:.1f} kWh", 11, DIM,
+            "semi", anchor="mm", spacing=1)
 
 
 def page_battery(data: dict) -> bytes:
@@ -1136,3 +1196,103 @@ def render(page: str, data: dict) -> bytes:
     if data.get("has_grid") is False and page in SOLAR_ONLY:
         return SOLAR_ONLY[page](data)
     return RENDERERS[page](data)
+
+
+# ----------------------------------------------------------------------------
+# Published files: every page in several shapes and sizes, as JPG
+# ----------------------------------------------------------------------------
+
+# (width, height) per shape, hi-res and low-res
+FORMATS = {
+    "1x1": {"hires": (1440, 1440), "lowres": (720, 720)},
+    "16x9": {"hires": (1920, 1080), "lowres": (960, 540)},
+    "4x3": {"hires": (1600, 1200), "lowres": (800, 600)},
+    "9x10": {"hires": (1080, 1200), "lowres": (540, 600)},
+    "9x16": {"hires": (1080, 1920), "lowres": (540, 960)},
+}
+# extra overview layouts for controllers that draw their own content on top
+VARIANTS = {"overview-slot": "slot", "overview-flow": "flow"}
+JPEG_QUALITY = 88
+
+
+def render_image(page: str, data: dict, backdrop: Image.Image | None = None,
+                 shape: str = "1x1") -> Image.Image:
+    """A page (or an overview variant) as a full-size picture (2x working size).
+    The overview family has its own layout per shape; other pages are square
+    (optionally drawn on a given background slice, see fit())."""
+    _RAW.on, _RAW.bg = True, backdrop
+    try:
+        if has_layout(page, data):
+            return page_overview(data, VARIANTS.get(page), shape)
+        if page in VARIANTS:
+            page = "overview"
+        return render(page, data)
+    finally:
+        _RAW.on, _RAW.bg = False, None
+
+
+def has_layout(page: str, data: dict) -> bool:
+    """Pages drawn natively at every shape (the rest are centred on a wider background)."""
+    return (page == "overview" or page in VARIANTS) and is_ready("overview", data) \
+        and data.get("has_grid") is not False
+
+
+def _backdrop(width: int, height: int, x0: int, y0: int) -> Image.Image:
+    """The screens' background (gradient, colour washes, dot grid) at any shape, in the
+    2x working size; the dot grid lines up with a square page placed at (x0, y0)."""
+    img = Image.new("RGB", (width, height), BG_TOP)
+    d = ImageDraw.Draw(img, "RGBA")
+    for y in range(0, height, 4):
+        d.rectangle([0, y, width, y + 4], fill=mix(BG_TOP, BG_BOTTOM, y / height))
+    glow = Image.new("RGB", (width // 2, height // 2), (0, 0, 0))
+    g = ImageDraw.Draw(glow)
+    gw, gh = glow.size  # the square's washes, moved to the corners of the whole picture
+    g.ellipse([-80, -100, 240, 180], fill=(0, 20, 38))
+    g.ellipse([gw - 180, gh - 180, gw + 120, gh + 120], fill=(22, 8, 40))
+    glow = glow.filter(ImageFilter.GaussianBlur(9)).resize((width, height), Image.BILINEAR)
+    img = ImageChops.screen(img, glow)
+    d = ImageDraw.Draw(img, "RGBA")
+    step = 24 * SS
+    for x in range(x0 % step, width, step):
+        for y in range(y0 + 84 * SS - ((y0 + 84 * SS) // step) * step, height - 20 * SS, step):
+            if x0 <= x < x0 + C and y0 <= y < y0 + 84 * SS:
+                continue  # keep the header area clear, as on the square
+            d.point([(x, y)], fill=(255, 255, 255, 26))
+    return img
+
+
+def fit(page: str, data: dict, width: int, height: int, shape: str = "1x1") -> Image.Image:
+    """A page at any shape, never stretched: pages with their own layout fill the
+    whole picture; others are drawn at full height (or width) in the middle of the
+    background continued to that shape, without seams."""
+    if has_layout(page, data):
+        return render_image(page, data, shape=shape).resize((width, height), Image.LANCZOS)
+    if width == height:
+        return render_image(page, data).resize((width, height), Image.LANCZOS)
+    scale = C / min(width, height)
+    bw, bh = round(width * scale), round(height * scale)
+    x0, y0 = (bw - C) // 2, (bh - C) // 2
+    back = _backdrop(bw, bh, x0, y0)
+    square = render_image(page, data, back.crop((x0, y0, x0 + C, y0 + C)))
+    back.paste(square, (x0, y0))
+    return back.resize((width, height), Image.LANCZOS)
+
+
+def jpeg(img: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=JPEG_QUALITY, optimize=True, progressive=True)
+    return buf.getvalue()
+
+
+def export(page: str, data: dict, shapes=None) -> dict[str, bytes]:
+    """Every shape (or the given ones) and size of one page:
+    {"overview-16x9-hires.jpg": bytes, ...}."""
+    files = {}
+    for shape, sizes in FORMATS.items():
+        if shapes is not None and shape not in shapes:
+            continue
+        big = fit(page, data, *sizes["hires"], shape=shape)
+        for res, (w, h) in sizes.items():
+            img = big if (w, h) == big.size else big.resize((w, h), Image.LANCZOS)
+            files[f"{page}-{shape}-{res}.jpg"] = jpeg(img)
+    return files

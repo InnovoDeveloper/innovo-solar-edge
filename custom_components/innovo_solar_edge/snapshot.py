@@ -5,7 +5,11 @@ week. Most are redrawn every 60 s, solar and week every 10 minutes; a page with
 no data yet shows a "gathering data" placeholder. Each page is
 an image entity (authenticated); with the 'Publish the dashboard image' option
 each page is also written under /local with an unguessable name so a controller
-can load it with a plain URL.
+can load it with a plain URL. With a publish folder set, every page and the
+overview variants (overview-slot, overview-flow) are also written there as JPG
+with fixed names, <page>-<shape>-<res>.jpg for each shape in screens.FORMATS
+(1x1, 16x9, 4x3, 9x10, 9x16) in hires and lowres, plus <page>.jpg (square,
+low-res) - for a folder another web server on the box already serves over HTTP.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import datetime
 import logging
 import os
 import secrets
+import time
 
 from homeassistant.components.image import ImageEntity
 from homeassistant.components.sensor import SensorEntity
@@ -21,11 +26,13 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
-from .screens import PAGES, SIZE, render
+from .screens import FORMATS, PAGES, SIZE, VARIANTS, export, render
 
 _LOGGER = logging.getLogger(__name__)
 
 CONF_SNAPSHOT_FILE = "energy_snapshot_file"
+CONF_PUBLISH_DIR = "energy_publish_dir"
+SHAPES_EVERY = 2  # publish the non-square shapes every N minutes (a full set is ~17 s of CPU on an 8-core ARM box)
 INTERVAL = datetime.timedelta(seconds=60)
 SLOW_PAGES = {"solar": 10, "week": 10}  # redraw every N minutes
 WWW_DIR = "innovo_solar_edge"
@@ -179,6 +186,14 @@ class SnapshotPublisher:
             return None
         return f"/local/{WWW_DIR}/{self.file_name(page)}"
 
+    @property
+    def publish_dir(self) -> str | None:
+        return self.model.entry.options.get(CONF_PUBLISH_DIR) or None
+
+    def publish_path(self, page: str) -> str | None:
+        folder = self.publish_dir
+        return os.path.join(folder, f"{page}.jpg") if folder else None
+
     @callback
     def start(self) -> None:
         self._unsub = async_track_time_interval(self.hass, self._tick, INTERVAL)
@@ -212,15 +227,51 @@ class SnapshotPublisher:
             if self.file_enabled:
                 await self.hass.async_add_executor_job(self._write_file, page, png)
         self.model.notify()
+        if self.publish_dir:
+            # every shape of the pages drawn this tick (+ the overview variants);
+            # the non-square shapes less often, as they cost several renders each
+            shapes = None if force or self._ticks % SHAPES_EVERY == 0 else ["1x1"]
+            names = pages + (list(VARIANTS) if "overview" in pages else [])
+            await self.hass.async_add_executor_job(self._publish, names, data, shapes)
 
     def _write_file(self, page: str, image: bytes) -> None:
         folder = self.hass.config.path("www", WWW_DIR)
         os.makedirs(folder, exist_ok=True)
-        target = os.path.join(folder, self.file_name(page))
-        tmp = target + ".tmp"
-        with open(tmp, "wb") as handle:
-            handle.write(image)
-        os.replace(tmp, target)
+        _write_atomic(os.path.join(folder, self.file_name(page)), image)
+
+    def _publish(self, names: list[str], data: dict, shapes) -> None:
+        """Write <name>-<shape>-<res>.jpg for each page, plus <name>.jpg (square, low-res)."""
+        folder = self.publish_dir
+        started = time.monotonic()
+        try:
+            os.makedirs(folder, exist_ok=True)
+            for name in names:
+                try:
+                    files = export(name, data, shapes)
+                except Exception:
+                    _LOGGER.exception("Publishing the %s screen failed", name)
+                    continue
+                for file_name, image in files.items():
+                    _write_atomic(os.path.join(folder, file_name), image)
+                square = files.get(f"{name}-1x1-lowres.jpg")
+                if square:
+                    _write_atomic(os.path.join(folder, f"{name}.jpg"), square)
+            self._publish_error = None
+        except OSError as err:
+            if getattr(self, "_publish_error", None) != str(err):  # log each new problem once
+                self._publish_error = str(err)
+                _LOGGER.warning("Can't write the screens to %s: %s", folder, err)
+        _LOGGER.debug("Published %d screens (%s) in %.1f s", len(names), shapes or "all shapes",
+                      time.monotonic() - started)
+
+
+def _write_atomic(target: str, data: bytes) -> None:
+    """Write via a temp file so a web server never serves a half-written image."""
+    tmp = target + ".tmp"
+    with open(tmp, "wb") as handle:
+        handle.write(data)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, target)
 
 
 def _base():
@@ -277,6 +328,11 @@ class DashboardImageUrl(_base(), SensorEntity):
             "size": f"{SIZE}x{SIZE}",
             "refresh_seconds": int(INTERVAL.total_seconds()),
             "pages": {p: snap.url_path(p) for p in PAGES} if snap.file_enabled else None,
+            "publish_dir": snap.publish_dir,
+            "published_files": "<page>-<shape>-<res>.jpg" if snap.publish_dir else None,
+            "published_pages": PAGES + list(VARIANTS) if snap.publish_dir else None,
+            "published_shapes": {shape: {res: f"{w}x{h}" for res, (w, h) in sizes.items()}
+                                 for shape, sizes in FORMATS.items()} if snap.publish_dir else None,
             "image_entities": {p: ("image.energy_dashboard_image" if p == MAIN_PAGE else f"image.energy_screen_{p}")
                                for p in PAGES},
         }

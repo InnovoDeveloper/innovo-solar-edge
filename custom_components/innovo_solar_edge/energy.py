@@ -607,10 +607,15 @@ class EnergyModel:
             else round(max((1 - t["import"] / house) * 100, 0))
         )
         v["cost_today"] = round(day["cost"] - day["credit"], 2)
-        if house is not None:
+        # what midnight saves into the daily history; solar-only sites (no meter)
+        # have no house/grid figures, so they record solar alone
+        if house is not None or (not self.has_grid and t["solar"] is not None):
+            def r2(value):
+                return None if value is None else round(value, 2)
+
             self.data["last_today"] = {
-                "date": today, "solar": round(t["solar"], 2), "house": round(house, 2),
-                "import": round(t["import"], 2), "export": round(t["export"], 2),
+                "date": today, "solar": r2(t["solar"]), "house": r2(house),
+                "import": r2(t["import"]), "export": r2(t["export"]),
                 "cost": v["cost_today"], "saved": v["saved_today"],
             }
 

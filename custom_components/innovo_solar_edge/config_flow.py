@@ -701,7 +701,15 @@ class SolaredgeModbusMultiOptionsFlowHandler(OptionsFlow):
                 errors[ConfName.SLEEP_AFTER_WRITE] = "invalid_sleep_interval"
             elif user_input[ConfName.SLEEP_AFTER_WRITE] > 60:
                 errors[ConfName.SLEEP_AFTER_WRITE] = "invalid_sleep_interval"
+            elif (folder := (user_input.get("energy_publish_dir") or "").strip()) and (
+                not folder.startswith("/") or ".." in folder.split("/")
+            ):
+                errors["energy_publish_dir"] = "invalid_publish_dir"
             else:
+                if not folder:
+                    user_input.pop("energy_publish_dir", None)
+                else:
+                    user_input["energy_publish_dir"] = folder.rstrip("/")
                 if user_input[ConfName.DETECT_BATTERIES] is True:
                     self.init_info = user_input
                     return await self.async_step_battery_options()
@@ -748,6 +756,9 @@ class SolaredgeModbusMultiOptionsFlowHandler(OptionsFlow):
                 ),
                 "energy_snapshot_file": self.config_entry.options.get(
                     "energy_snapshot_file", False
+                ),
+                "energy_publish_dir": self.config_entry.options.get(
+                    "energy_publish_dir"
                 ),
             }
 
@@ -807,6 +818,14 @@ class SolaredgeModbusMultiOptionsFlowHandler(OptionsFlow):
                         "energy_snapshot_file",
                         default=user_input.get("energy_snapshot_file", False),
                     ): cv.boolean,
+                    # Innovo: also write the screens as <page>.jpg into a folder
+                    # served by another web server (fixed names, no token)
+                    vol.Optional(
+                        "energy_publish_dir",
+                        description={
+                            "suggested_value": user_input.get("energy_publish_dir")
+                        },
+                    ): str,
                 },
             ),
             errors=errors,
