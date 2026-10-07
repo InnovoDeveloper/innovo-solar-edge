@@ -710,6 +710,8 @@ class SolaredgeModbusMultiOptionsFlowHandler(OptionsFlow):
                     user_input.pop("energy_publish_dir", None)
                 else:
                     user_input["energy_publish_dir"] = folder.rstrip("/")
+                # the user has chosen; never auto-configure publishing again
+                user_input["energy_publish_auto"] = True
                 if user_input[ConfName.DETECT_BATTERIES] is True:
                     self.init_info = user_input
                     return await self.async_step_battery_options()

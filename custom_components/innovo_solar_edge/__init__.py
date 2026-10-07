@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib.metadata
 import logging
+import os
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -211,6 +212,34 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
+# Innovo Aura (MagicCube) boxes serve this folder over plain HTTP at /icons/
+AURA_WEB_ICONS = "/mnt/dietpi_userdata/innovo/www/icons"
+
+
+def _aura_publish_dir() -> str | None:
+    """The screens folder on an Innovo Aura, if this is one (and it is writable)."""
+    if os.path.isdir(AURA_WEB_ICONS) and os.access(AURA_WEB_ICONS, os.W_OK):
+        return os.path.join(AURA_WEB_ICONS, "solar")
+    return None
+
+
+async def _async_auto_publish(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Once per install: on an Innovo Aura, publish the screens to its web folder
+    (http://<box>/icons/solar/) without any setup. Runs before the options
+    listener is added, so it doesn't trigger a reload; saving the integration
+    settings marks it done, so a cleared folder stays cleared."""
+    from .snapshot import CONF_PUBLISH_DIR
+
+    if entry.options.get("energy_publish_auto"):
+        return
+    options = {**entry.options, "energy_publish_auto": True}
+    folder = await hass.async_add_executor_job(_aura_publish_dir)
+    if folder and not entry.options.get(CONF_PUBLISH_DIR):
+        options[CONF_PUBLISH_DIR] = folder
+        _LOGGER.info("Innovo Aura detected: publishing the energy screens to %s", folder)
+    hass.config_entries.async_update_entry(entry, options=options)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up SolarEdge Modbus Muti from a config entry."""
 
@@ -218,6 +247,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # aren't safe to import until we know the versions are good -- see
     # _check_dependency_versions()'s docstring.
     installed_versions = await hass.async_add_executor_job(_check_dependency_versions)
+
+    await _async_auto_publish(hass, entry)
 
     from modbus_connection import ModbusTcpParams
     from modbus_connection.tmodbus import ModbusConnection
