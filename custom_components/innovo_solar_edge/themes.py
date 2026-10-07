@@ -147,7 +147,28 @@ THEMES = {
     },
 }
 
-MODES = ("dark", "light")
+# Graphics styles: how things are drawn, independent of the colours. A theme's own style
+# has the theme's name; any style can be combined with any palette (mix and match).
+#   node:   circle | double | square | pill | orb | gear
+#   route:  curve | ortho | wave | pipe | trace
+#   gauge:  ring | segments | dial
+#   icons:  line | solid | pixel | schematic
+#   chart:  area | bars | steps | line
+#   decor:  none | gears | leaves | stars | sparkles | dims
+STYLES = {
+    "neon":      {"label": "Neon", "node": "circle", "route": "curve", "gauge": "ring", "icons": "line", "chart": "area", "decor": "none"},
+    "retro":     {"label": "Retro Arcade", "node": "square", "route": "ortho", "gauge": "segments", "icons": "pixel", "chart": "steps", "decor": "stars"},
+    "modern":    {"label": "Modern", "node": "circle", "route": "ortho", "gauge": "ring", "icons": "solid", "chart": "bars", "decor": "none"},
+    "classic":   {"label": "Classic", "node": "double", "route": "curve", "gauge": "dial", "icons": "line", "chart": "line", "decor": "none"},
+    "tesla":     {"label": "Tesla", "node": "circle", "route": "curve", "gauge": "ring", "icons": "line", "chart": "line", "decor": "none"},
+    "steampunk": {"label": "Steampunk", "node": "gear", "route": "pipe", "gauge": "dial", "icons": "line", "chart": "area", "decor": "gears"},
+    "ethereal":  {"label": "Ethereal", "node": "orb", "route": "wave", "gauge": "ring", "icons": "solid", "chart": "area", "decor": "sparkles"},
+    "eco":       {"label": "Eco", "node": "circle", "route": "wave", "gauge": "ring", "icons": "solid", "chart": "bars", "decor": "leaves"},
+    "starship":  {"label": "Starship", "node": "pill", "route": "ortho", "gauge": "segments", "icons": "line", "chart": "bars", "decor": "none"},
+    "blueprint": {"label": "Blueprint", "node": "square", "route": "trace", "gauge": "dial", "icons": "schematic", "chart": "line", "decor": "dims"},
+}
+
+MODES = ("dark", "light", "black", "white")  # black / white: the dark / light colours on pure #000 / #FFF
 DEFAULT = "neon-dark"
 
 
@@ -156,16 +177,26 @@ def theme_keys() -> list[str]:
     return [f"{name}-{mode}" for name in THEMES for mode in MODES]
 
 
-def resolve(key: str | None) -> dict:
-    """Everything screens.py needs for a theme-mode key (unknown keys fall back to neon-dark)."""
+def resolve(key: str | None, style: str | None = None) -> dict:
+    """Everything screens.py needs for a palette-mode key (e.g. "blueprint-dark") drawn in a
+    graphics style (default: the palette's own). Unknown names fall back to neon-dark."""
     name, _, mode = (key or DEFAULT).partition("-")
     theme = THEMES.get(name) or THEMES["neon"]
-    values = dict(theme.get(mode) or theme["dark"])
+    look = STYLES.get(style or name) or STYLES.get(name) or STYLES["neon"]
+    graphics = THEMES.get(style or name) or theme  # fonts, cards and texture follow the style
+    pure = {"black": ("dark", BLACK), "white": ("light", WHITE)}.get(mode)
+    values = dict(theme[pure[0]] if pure else (theme.get(mode) or theme["dark"]))
+    if pure:  # solid background: no gradient, colour washes or texture
+        values.update(BG_TOP=pure[1], BG_BOTTOM=pure[1], WASHES=(pure[1], pure[1]))
+        values.pop("NODE", None)
     if "NODE" not in values:  # flow-diagram circles: near the background, a touch lighter/whiter
         light = mode == "light"
         base, toward, amount = values["BG_TOP"], (WHITE if light else values["TEXT"]), (0.7 if light else 0.05)
         values["NODE"] = tuple(int(base[i] + (toward[i] - base[i]) * amount) for i in range(3))
-    bold, semi, medium = _FONTS[theme["font"]]
-    values.update(WEIGHT_FILE={"bold": bold, "semi": semi, "medium": medium}, FONT_SCALE=theme["scale"],
-                  CARD_STYLE=theme["card"], RADIUS=theme["radius"], TEXTURE=theme["texture"])
+    bold, semi, medium = _FONTS[graphics["font"]]
+    values.update(WEIGHT_FILE={"bold": bold, "semi": semi, "medium": medium}, FONT_SCALE=graphics["scale"],
+                  CARD_STYLE=graphics["card"], RADIUS=graphics["radius"],
+                  TEXTURE="none" if pure else graphics["texture"],
+                  NODE_SHAPE=look["node"], ROUTE=look["route"], GAUGE=look["gauge"], ICONS=look["icons"],
+                  CHART=look["chart"], DECOR=look["decor"])
     return values

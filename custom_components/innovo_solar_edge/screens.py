@@ -61,6 +61,13 @@ TEXTURE = "dots"
 WASHES = ((0, 20, 38), (22, 8, 40))
 GLOW = 1.0
 FONT_SCALE = 1.0
+# graphics style (see themes.STYLES); these are the "neon" values
+NODE_SHAPE = "circle"
+ROUTE = "curve"
+GAUGE = "ring"
+ICONS = "line"
+CHART = "area"
+DECOR = "none"
 
 FONT_DIR = os.path.join(os.path.dirname(__file__), "fonts")
 FALLBACK = {
@@ -74,27 +81,27 @@ _THEME_LOCK = threading.RLock()  # renders swap the module colours, one theme at
 _THEME = None
 
 
-def apply_theme(key: str | None) -> None:
-    """Swap in a theme-mode's colours, fonts and styles (see themes.py)."""
+def apply_theme(key: str | None, style: str | None = None) -> None:
+    """Swap in a palette-mode's colours and a graphics style (see themes.py)."""
     global _THEME
     try:
         from .themes import resolve
     except ImportError:  # loaded on its own (tests)
         from themes import resolve
-    globals().update(resolve(key))
-    _THEME = key
+    globals().update(resolve(key, style))
+    _THEME = (key, style)
 
 
 def themed(fn):
     """Run a render with the theme named in data["_theme"] (default: neon-dark)."""
     def wrapper(page, data, *args, **kwargs):
         with _THEME_LOCK:
-            previous = _THEME
-            apply_theme(data.get("_theme"))
+            previous = _THEME or (None, None)
+            apply_theme(data.get("_theme"), data.get("_style"))
             try:
                 return fn(page, data, *args, **kwargs)
             finally:
-                apply_theme(previous)
+                apply_theme(*previous)
     wrapper.__name__, wrapper.__doc__ = fn.__name__, fn.__doc__
     return wrapper
 
@@ -171,7 +178,16 @@ def draw_background(img, d, g, header, origin=(0, 0)):
                 d.line([(x, 0), (x, h)], fill=INK + (alpha,), width=1 if alpha < 20 else SS)
             for y in range(oy % minor, h, minor):
                 d.line([(0, y), (w, y)], fill=INK + (alpha,), width=1 if alpha < 20 else SS)
-    elif TEXTURE == "grain":
+    if DECOR == "stars":  # pixel starfield
+        import random
+
+        rnd = random.Random(11)
+        for _ in range(w * h // 9000):
+            x, y = rnd.randrange(w), rnd.randrange(h)
+            if free(x, y):
+                size = rnd.choice((1, 1, 2, 2, 3)) * SS
+                d.rectangle([x, y, x + size, y + size], fill=INK + (rnd.randrange(40, 150),))
+    if TEXTURE == "grain":
         import random
 
         rnd = random.Random(7)
@@ -225,6 +241,15 @@ def fmt_duration(hours) -> str | None:
     if m == 60:
         h, m = h + 1, 0
     return f"{h}h {m:02d}m" if h else f"{m}m"
+
+
+
+PIXEL_ICONS = {  # 7 x 7 bitmaps for the pixel icon set
+    "sun": ("X..X..X", ".X.X.X.", "..XXX..", "XXXXXXX", "..XXX..", ".X.X.X.", "X..X..X"),
+    "home": ("...X...", "..XXX..", ".XXXXX.", "XXXXXXX", ".XX.XX.", ".XX.XX.", ".XXXXX."),
+    "grid": ("...XXX.", "..XXX..", ".XXX...", "XXXXXX.", "...XXX.", "..XXX..", ".XX...."),
+    "battery": ("..XXX..", ".XXXXX.", ".X...X.", ".X...X.", ".X...X.", ".X...X.", ".XXXXX."),
+}
 
 
 class Canvas:
@@ -309,9 +334,50 @@ class Canvas:
                                      radius=2 * SS, fill=accent + (255,))
             self.g.line([(x * SS / 2, (y + 10) * SS / 2), (x * SS / 2, (y + h - 10) * SS / 2)], fill=accent, width=3)
 
-    def arc(self, cx, cy, r, start, end, width, c1, c2=None, glow=6, track=True):
-        """Gradient arc from angle start to end (degrees, 0 = east, clockwise)."""
+    def arc(self, cx, cy, r, start, end, width, c1, c2=None, glow=6, track=True, plain=False):
+        """Gradient arc from angle start to end (degrees, 0 = east, clockwise), drawn in the
+        style's gauge look; plain=True always draws the smooth ring (spinners, node rings)."""
         box = [(cx - r) * SS, (cy - r) * SS, (cx + r) * SS, (cy + r) * SS]
+        if not plain and GAUGE == "segments":  # blocks with gaps, like an LED bar
+            sweep = 360 if track else max(end - start, 0)
+            for a in range(0, int(sweep), 12):
+                a0, a1 = start + a, start + a + 8
+                lit = a0 < end
+                col = mix(c1, c2 or c1, a / max(end - start, 1)) if lit else None
+                if lit:
+                    self.d.arc(box, a0, min(a1, end + 0.1) if a1 > end else a1, fill=col + (255,), width=int(width * SS))
+                    if glow:
+                        self.g.arc([v / 2 for v in box], a0, a1, fill=col, width=int(width * SS / 2 + glow / 2))
+                elif track:
+                    self.d.arc(box, a0, a1, fill=INK + (22,), width=int(width * SS))
+            return
+        if not plain and GAUGE == "dial":  # instrument dial: ticks, a slim arc and a pointer
+            thin = max(width * 0.32, 2.2)
+            tbox = [(cx - r) * SS, (cy - r) * SS, (cx + r) * SS, (cy + r) * SS]
+            if track:
+                self.d.arc(tbox, 0, 360, fill=INK + (26,), width=int(thin * SS))
+                for i in range(0, 360, 10):
+                    a = math.radians(i)
+                    major = i % 30 == 0
+                    r1, r2 = r + width * 0.45, r + width * (0.45 + (0.55 if major else 0.3))
+                    self.line([(cx + math.cos(a) * r1, cy + math.sin(a) * r1), (cx + math.cos(a) * r2, cy + math.sin(a) * r2)],
+                              INK, 1.4 if major else 0.9, alpha=90 if major else 45)
+            if end > start:
+                steps = max(int((end - start) / 2), 1)
+                for i in range(steps):
+                    a0 = start + (end - start) * i / steps
+                    self.d.arc(tbox, a0, a0 + (end - start) / steps + 0.6, fill=mix(c1, c2 or c1, i / max(steps - 1, 1)) + (255,),
+                               width=int(thin * SS))
+                a = math.radians(end)
+                tip = (cx + math.cos(a) * (r - thin), cy + math.sin(a) * (r - thin))
+                base = r + width * 0.5
+                left = (cx + math.cos(a - 0.09) * base, cy + math.sin(a - 0.09) * base)
+                right = (cx + math.cos(a + 0.09) * base, cy + math.sin(a + 0.09) * base)
+                self.d.polygon([(px * SS, py * SS) for px, py in (tip, left, right)], fill=(c2 or c1) + (255,))
+                if glow:
+                    self.g.ellipse([(tip[0] - 6) * SS / 2, (tip[1] - 6) * SS / 2, (tip[0] + 6) * SS / 2, (tip[1] + 6) * SS / 2],
+                                   fill=c2 or c1)
+            return
         if track:
             self.d.arc(box, 0, 360, fill=INK + (18,), width=int(width * SS))
         if end <= start:
@@ -339,11 +405,21 @@ class Canvas:
         if len(pts) == 2:
             (x0, y0), (x1, y1) = pts
             pts = [(x0 + (x1 - x0) * i / 40, y0 + (y1 - y0) * i / 40) for i in range(41)]
-        self.line(pts, INK, 2, alpha=22)
+        if ROUTE == "pipe":  # a pipe body with collars, whether or not anything flows
+            body = 9.5
+            self.line(pts, mix(BG_TOP, INK, 0.15), body + 3)
+            self.line(pts, mix(BG_TOP, color, 0.32 if active else 0.18), body)
+            self.line(pts, mix(color, (255, 255, 255), 0.4), 1.2, alpha=70 if active else 30)
+            for k, (jx, jy) in enumerate(_resample(pts, 46.0)[1:-1]):
+                self.circle(jx, jy, body * 0.62, fill=mix(BG_TOP, CYAN, 0.55) + (255,), outline=mix(CYAN, BG_TOP, 0.3) + (255,), width=1)
+        else:
+            self.line(pts, INK, 2, alpha=22)
         if not active:
             return
         path = list(reversed(pts)) if reverse else pts
         width = 2.6 + min(watts / 1500, 2.4)
+        if ROUTE == "pipe":
+            width = 2.2
         self.line(path, color, width + 2, glow=4 + width, alpha=35)  # soft bed under the pattern
         width += 1.6
         seg = 7.0
@@ -358,14 +434,68 @@ class Canvas:
 
     # --- icons (centered at cx, cy, size s) ---
 
-    def icon_sun(self, cx, cy, s, color=SOLAR):
+    def _pixels(self, name, cx, cy, s, color, level=None):
+        rows = PIXEL_ICONS[name]
+        cell = s * 1.15 / 7
+        x0, y0 = cx - cell * 3.5, cy - cell * 3.5
+        fill_from = None if level is None else 6 - round(4 * max(min(level, 100), 0) / 100)
+        for j, row in enumerate(rows):
+            for i, ch in enumerate(row):
+                on = ch == "X" or (fill_from is not None and name == "battery" and 2 <= j <= 5 and 2 <= i <= 4 and j > fill_from)
+                if on:
+                    self.d.rectangle([(x0 + i * cell) * SS, (y0 + j * cell) * SS, (x0 + (i + 1) * cell - 0.6) * SS,
+                                      (y0 + (j + 1) * cell - 0.6) * SS], fill=color + (255,))
+
+    def icon_sun(self, cx, cy, s, color=None):
+        color = color or SOLAR
+        if ICONS == "pixel":
+            return self._pixels("sun", cx, cy, s, color)
+        if ICONS == "schematic":  # PV cell: a panel with a diagonal and light arrows
+            w = s * 0.62
+            self.d.rectangle([(cx - w / 2) * SS, (cy - w * 0.38) * SS, (cx + w / 2) * SS, (cy + w * 0.38) * SS],
+                             outline=color + (255,), width=int(1.6 * SS))
+            self.line([(cx - w / 2, cy + w * 0.38), (cx + w / 2, cy - w * 0.38)], color, 1.4)
+            for k in (-0.18, 0.12):
+                ax, ay = cx + w * k, cy - w * 0.62
+                self.line([(ax - s * 0.12, ay - s * 0.12), (ax, ay)], color, 1.4)
+                self.line([(ax, ay), (ax - s * 0.07, ay)], color, 1.4)
+                self.line([(ax, ay), (ax, ay - s * 0.07)], color, 1.4)
+            return
+        if ICONS == "solid":
+            self.circle(cx, cy, s * 0.3, fill=color + (255,))
+            for i in range(8):
+                a = math.radians(i * 45)
+                tip = (cx + math.cos(a) * s * 0.7, cy + math.sin(a) * s * 0.7)
+                l = (cx + math.cos(a - 0.22) * s * 0.42, cy + math.sin(a - 0.22) * s * 0.42)
+                r_ = (cx + math.cos(a + 0.22) * s * 0.42, cy + math.sin(a + 0.22) * s * 0.42)
+                self.d.polygon([(px * SS, py * SS) for px, py in (tip, l, r_)], fill=color + (255,))
+            return
         self.circle(cx, cy, s * 0.32, fill=color + (255,))
         for i in range(8):
             a = math.radians(i * 45)
             self.line([(cx + math.cos(a) * s * 0.48, cy + math.sin(a) * s * 0.48),
                        (cx + math.cos(a) * s * 0.66, cy + math.sin(a) * s * 0.66)], color, 2.4)
 
-    def icon_home(self, cx, cy, s, color=HOME):
+    def icon_home(self, cx, cy, s, color=None):
+        color = color or HOME
+        if ICONS == "pixel":
+            return self._pixels("home", cx, cy, s, color)
+        if ICONS == "solid":
+            w = s * 0.62
+            pts = [(cx - w, cy - s * 0.02), (cx, cy - s * 0.62), (cx + w, cy - s * 0.02), (cx + w * 0.74, cy - s * 0.02),
+                   (cx + w * 0.74, cy + s * 0.48), (cx - w * 0.74, cy + s * 0.48), (cx - w * 0.74, cy - s * 0.02)]
+            self.d.polygon([(px * SS, py * SS) for px, py in pts], fill=color + (255,))
+            self.d.rectangle([(cx - s * 0.11) * SS, (cy + s * 0.14) * SS, (cx + s * 0.11) * SS, (cy + s * 0.48) * SS],
+                             fill=NODE + (255,))
+            return
+        if ICONS == "schematic":  # outline house with a load (zig-zag) inside
+            w = s * 0.62
+            self.line([(cx - w, cy - s * 0.05), (cx, cy - s * 0.6), (cx + w, cy - s * 0.05)], color, 1.6)
+            self.line([(cx - w * 0.72, cy - s * 0.2), (cx - w * 0.72, cy + s * 0.45), (cx + w * 0.72, cy + s * 0.45),
+                       (cx + w * 0.72, cy - s * 0.2)], color, 1.6)
+            zz = [(cx - w * 0.45 + i * w * 0.15, cy + s * (0.12 if i % 2 else 0.28)) for i in range(7)]
+            self.line(zz, color, 1.3)
+            return
         w = s * 0.62
         self.line([(cx - w, cy - s * 0.05), (cx, cy - s * 0.6), (cx + w, cy - s * 0.05)], color, 3)
         self.line([(cx - w * 0.72, cy - s * 0.2), (cx - w * 0.72, cy + s * 0.45),
@@ -373,7 +503,21 @@ class Canvas:
         self.d.rectangle([(cx - s * 0.12) * SS, (cy + s * 0.12) * SS, (cx + s * 0.12) * SS, (cy + s * 0.45) * SS],
                          fill=color + (255,))
 
-    def icon_grid(self, cx, cy, s, color=GRID):
+    def icon_grid(self, cx, cy, s, color=None):
+        color = color or GRID
+        if ICONS == "pixel":
+            return self._pixels("grid", cx, cy, s, color)
+        if ICONS == "solid":  # a lightning bolt
+            pts = [(cx + s * 0.12, cy - s * 0.62), (cx - s * 0.36, cy + s * 0.06), (cx - s * 0.02, cy + s * 0.06),
+                   (cx - s * 0.14, cy + s * 0.62), (cx + s * 0.36, cy - s * 0.08), (cx + s * 0.02, cy - s * 0.08)]
+            self.d.polygon([(px * SS, py * SS) for px, py in pts], fill=color + (255,))
+            return
+        if ICONS == "schematic":  # AC source: a circle with a sine wave
+            r = s * 0.42
+            self.circle(cx, cy, r, outline=color + (255,), width=1.6)
+            wave = [(cx - r * 0.65 + r * 1.3 * i / 24, cy - r * 0.38 * math.sin(2 * math.pi * i / 24)) for i in range(25)]
+            self.line(wave, color, 1.5)
+            return
         top, base = cy - s * 0.6, cy + s * 0.5
         self.line([(cx - s * 0.4, base), (cx, top), (cx + s * 0.4, base)], color, 2.6)
         for k, w in ((0.25, 0.42), (0.55, 0.3)):
@@ -381,12 +525,26 @@ class Canvas:
             self.line([(cx - s * w, y), (cx + s * w, y)], color, 2.6)
         self.line([(cx - s * 0.22, cy + s * 0.05), (cx + s * 0.22, cy + s * 0.05)], color, 2)
 
-    def icon_battery(self, cx, cy, s, level=None, color=BATT):
+    def icon_battery(self, cx, cy, s, level=None, color=None):
+        color = color or BATT
+        if ICONS == "pixel":
+            return self._pixels("battery", cx, cy, s, color, level)
+        if ICONS == "schematic":  # cell plates: long (+) and short (-), twice
+            for k, (dx, long_) in enumerate(((-0.27, True), (-0.09, False), (0.09, True), (0.27, False))):
+                hh = s * (0.42 if long_ else 0.22)
+                self.line([(cx + s * dx, cy - hh), (cx + s * dx, cy + hh)], color, 2.2 if long_ else 3.2)
+            self.line([(cx - s * 0.5, cy), (cx - s * 0.27, cy)], color, 1.4)
+            self.line([(cx + s * 0.27, cy), (cx + s * 0.5, cy)], color, 1.4)
+            self.text((cx - s * 0.36, cy - s * 0.42), "+", max(int(s * 0.3), 8), color, "bold", anchor="mm")
+            return
         w, h = s * 0.5, s * 0.85
         self.d.rounded_rectangle([(cx - w / 2) * SS, (cy - h / 2) * SS, (cx + w / 2) * SS, (cy + h / 2) * SS],
                                  radius=4 * SS, outline=color + (255,), width=int(2.6 * SS))
         self.d.rectangle([(cx - w * 0.2) * SS, (cy - h / 2 - 5) * SS, (cx + w * 0.2) * SS, (cy - h / 2) * SS],
                          fill=color + (255,))
+        if ICONS == "solid":
+            self.d.rounded_rectangle([(cx - w / 2) * SS, (cy - h / 2) * SS, (cx + w / 2) * SS, (cy + h / 2) * SS],
+                                     radius=4 * SS, fill=color + (90,))
         if level is not None:
             fill_h = (h - 8) * max(min(level, 100), 0) / 100
             self.d.rectangle([(cx - w / 2 + 4) * SS, (cy + h / 2 - 4 - fill_h) * SS,
@@ -480,20 +638,47 @@ def _flow_diagram(cv, v, nodes, r=60, compact=False):
     """Solar / grid / home / battery nodes with live flows between them."""
     f = _flows(v)
     S, G, H, B = nodes["solar"], nodes["grid"], nodes["home"], nodes["battery"]
-    cv.flow(cv.bezier(S, (H[0], S[1]), H), SOLAR, f["s2h"])
-    cv.flow(cv.bezier(S, (G[0], S[1]), G), SOLAR, f["s2g"])
-    cv.flow([S, B], SOLAR, f["s2b"])
-    cv.flow([G, H], GRID, f["g2h"])
-    cv.flow(cv.bezier(B, (H[0], B[1]), H), BATT, f["b2h"])
-    cv.flow(cv.bezier(G, (G[0], B[1]), B), GRID, f["g2b"])
-    cv.flow(cv.bezier(B, (G[0], B[1]), G), BATT, f["b2g"])
+    _decor_behind(cv, nodes, r)
+    corners = []
+
+    def route(a, corner, b):
+        if corner is None:
+            pts = [a, b]
+        elif ROUTE in ("ortho", "pipe", "trace"):
+            pts = [a, corner, b]
+            corners.append(corner)
+        else:
+            pts = cv.bezier(a, corner, b)
+        pts = _resample(pts, 2.0) + [b]
+        if ROUTE == "wave":  # a gentle sine along the path
+            out = []
+            for i, (px, py) in enumerate(pts):
+                j = min(i + 1, len(pts) - 1) if i < len(pts) - 1 else i - 1
+                dx, dy = pts[j][0] - px, pts[j][1] - py
+                if i == len(pts) - 1:
+                    dx, dy = -dx, -dy
+                n = math.hypot(dx, dy) or 1
+                off = 3.6 * math.sin(i * 2.0 / 7.0) * min(i, len(pts) - 1 - i, 12) / 12
+                out.append((px - dy / n * off, py + dx / n * off))
+            pts = out
+        return pts
+
+    cv.flow(route(S, (H[0], S[1]), H), SOLAR, f["s2h"])
+    cv.flow(route(S, (G[0], S[1]), G), SOLAR, f["s2g"])
+    cv.flow(route(S, None, B), SOLAR, f["s2b"])
+    cv.flow(route(G, None, H), GRID, f["g2h"])
+    cv.flow(route(B, (H[0], B[1]), H), BATT, f["b2h"])
+    cv.flow(route(G, (G[0], B[1]), B), GRID, f["g2b"])
+    cv.flow(route(B, (G[0], B[1]), G), BATT, f["b2g"])
+    if ROUTE == "trace":  # circuit junctions
+        for jx, jy in set(corners):
+            cv.circle(jx, jy, 3.4, fill=INK + (230,))
 
     vsize, isize, lsize = (22, 18, 11) if compact else (30, 26, 13)
 
     def node(key, color, label, value, sub=None, sub_color=None, icon=None):
         x, y = nodes[key]
-        cv.circle(x, y, r + (6 if compact else 10), fill=BG_TOP + (255,))
-        cv.circle(x, y, r, fill=NODE + (255,), outline=color + (255,), width=2 if compact else 2.5, glow=5 if compact else 6)
+        _node_shape(cv, x, y, r, color, compact)
         icon(x, y - r * 0.5, isize)
         cv.text((x, y + r * 0.1), value, vsize, TEXT, "bold", anchor="mm")
         if not compact:
@@ -514,12 +699,116 @@ def _flow_diagram(cv, v, nodes, r=60, compact=False):
          RED if f["imp"] > 50 else BATT if f["export"] > 50 else MUTED, icon=cv.icon_grid)
     node("home", HOME, "HOME", fmt_kw(f["h"]) + unit, icon=cv.icon_home)
     bx, by = nodes["battery"]
-    if level is not None:
-        cv.arc(bx, by, r + (8 if compact else 12), -90, -90 + 360 * level / 100, 4 if compact else 5, BATT, BATT2, glow=4)
+    if level is not None and NODE_SHAPE in ("circle", "double", "orb"):
+        cv.arc(bx, by, r + (8 if compact else 12), -90, -90 + 360 * level / 100, 4 if compact else 5, BATT, BATT2, glow=4,
+               plain=True)
     state = (v.get("battery_state") or "").upper()
     node("battery", BATT, f"BATTERY · {state}".rstrip(" ·") if not compact else "BATTERY",
          fmt_kw(f["b"]) + unit, f"{level:.0f}%" if level is not None else None,
          icon=lambda x, y, sz: cv.icon_battery(x, y, sz, level))
+
+
+def _gear(cx, cy, r_out, r_in, teeth, rot=0.0):
+    pts = []
+    for i in range(teeth * 4):
+        a = rot + 2 * math.pi * i / (teeth * 4)
+        rr = r_out if i % 4 in (1, 2) else r_in
+        pts.append((cx + math.cos(a) * rr, cy + math.sin(a) * rr))
+    return pts
+
+
+def _node_shape(cv, x, y, r, color, compact):
+    """A flow-diagram node in the style's shape."""
+    w = 2 if compact else 2.5
+    glow = 5 if compact else 6
+    halo = r + (6 if compact else 10)
+    if NODE_SHAPE == "square":
+        cv.d.rounded_rectangle([(x - halo) * SS, (y - halo) * SS, (x + halo) * SS, (y + halo) * SS], radius=halo * 0.18 * SS,
+                               fill=BG_TOP + (255,))
+        cv.d.rounded_rectangle([(x - r) * SS, (y - r) * SS, (x + r) * SS, (y + r) * SS], radius=r * 0.16 * SS,
+                               fill=NODE + (255,), outline=color + (255,), width=int(w * SS))
+        cv.g.rectangle([(x - r) * SS / 2, (y - r) * SS / 2, (x + r) * SS / 2, (y + r) * SS / 2], outline=color, width=glow)
+    elif NODE_SHAPE == "pill":
+        hw, hh = r * 1.25, r * 0.95
+        cv.d.rounded_rectangle([(x - hw - 6) * SS, (y - hh - 6) * SS, (x + hw + 6) * SS, (y + hh + 6) * SS],
+                               radius=(hh + 6) * SS, fill=BG_TOP + (255,))
+        cv.d.rounded_rectangle([(x - hw) * SS, (y - hh) * SS, (x + hw) * SS, (y + hh) * SS], radius=hh * SS,
+                               fill=NODE + (255,), outline=color + (255,), width=int(w * 1.4 * SS))
+        cv.d.rounded_rectangle([(x - hw) * SS, (y - hh) * SS, (x - hw + hh * 0.55) * SS, (y + hh) * SS], radius=hh * 0.5 * SS,
+                               fill=color + (255,))
+    elif NODE_SHAPE == "gear":
+        cv.d.polygon([(px * SS, py * SS) for px, py in _gear(x, y, r + 9, r + 2, 12)], fill=mix(BG_TOP, CYAN, 0.35) + (255,))
+        cv.d.polygon([(px * SS, py * SS) for px, py in _gear(x, y, r + 9, r + 2, 12)], outline=CYAN + (255,))
+        cv.circle(x, y, r, fill=NODE + (255,), outline=color + (255,), width=w, glow=glow)
+        for i in range(6):
+            a = math.radians(i * 60 + 30)
+            cv.circle(x + math.cos(a) * (r - 5), y + math.sin(a) * (r - 5), 1.6, fill=CYAN + (220,))
+    elif NODE_SHAPE == "orb":
+        cv.circle(x, y, halo, fill=BG_TOP + (255,))
+        for i in range(12, 0, -1):  # radial glow from the colour into the node fill
+            cv.circle(x, y - r * 0.12 * (1 - i / 12), r * i / 12, fill=mix(NODE, color, 0.42 * (1 - i / 12)) + (255,))
+        cv.circle(x, y, r, outline=color + (200,), width=1.4, glow=glow + 4)
+    else:
+        cv.circle(x, y, halo, fill=BG_TOP + (255,))
+        cv.circle(x, y, r, fill=NODE + (255,), outline=color + (255,), width=w, glow=glow)
+        if NODE_SHAPE == "double":
+            cv.circle(x, y, r + 4.5, outline=color + (120,), width=1)
+
+
+def _leaf(cv, cx, cy, length, angle, color):
+    a = math.radians(angle)
+    tip = (cx + math.cos(a) * length, cy + math.sin(a) * length)
+    pts = []
+    for i in range(21):
+        t = i / 20
+        bulge = math.sin(math.pi * t) * length * 0.32
+        px, py = cx + (tip[0] - cx) * t, cy + (tip[1] - cy) * t
+        pts.append((px - math.sin(a) * bulge, py + math.cos(a) * bulge))
+    for i in range(20, -1, -1):
+        t = i / 20
+        bulge = math.sin(math.pi * t) * length * 0.32
+        px, py = cx + (tip[0] - cx) * t, cy + (tip[1] - cy) * t
+        pts.append((px + math.sin(a) * bulge, py - math.cos(a) * bulge))
+    cv.d.polygon([(px * SS, py * SS) for px, py in pts], fill=color + (150,))
+    cv.line([(cx, cy), tip], mix(color, BG_TOP, 0.4), 1, alpha=180)
+
+
+def _sparkle(cv, cx, cy, size, color):
+    pts = []
+    for i in range(8):
+        a = math.radians(i * 45)
+        rr = size if i % 2 == 0 else size * 0.28
+        pts.append((cx + math.cos(a) * rr, cy + math.sin(a) * rr))
+    cv.d.polygon([(px * SS, py * SS) for px, py in pts], fill=color + (210,))
+    cv.g.ellipse([(cx - size) * SS / 2, (cy - size) * SS / 2, (cx + size) * SS / 2, (cy + size) * SS / 2], fill=color)
+
+
+def _decor_behind(cv, nodes, r):
+    """The style's decoration around the flow diagram (drawn before it)."""
+    S, G, H, B = nodes["solar"], nodes["grid"], nodes["home"], nodes["battery"]
+    if DECOR == "gears":
+        for (x, y), size, teeth, rot in ((S, r * 1.9, 16, 0.1), (B, r * 1.5, 12, 0.3),
+                                         ((G[0] - r * 0.8, G[1] + r * 1.4), r * 1.0, 10, 0.0)):
+            cv.d.polygon([(px * SS, py * SS) for px, py in _gear(x, y, size, size * 0.86, teeth, rot)],
+                         outline=CYAN + (55,), fill=CYAN + (10,))
+            cv.circle(x, y, size * 0.35, outline=CYAN + (45,), width=1.2)
+    elif DECOR == "leaves":
+        for (x, y), ang in ((H, -60), (H, -20), (B, 200), (G, 230)):
+            _leaf(cv, x + math.cos(math.radians(ang)) * (r + 4), y + math.sin(math.radians(ang)) * (r + 4), r * 0.75, ang,
+                  BATT)
+    elif DECOR == "sparkles":
+        for (x, y), dx, dy, size in ((S, 1.5, -0.6, 7), (S, -1.6, 0.2, 5), (H, 1.2, -1.1, 6), (G, -1.1, -1.2, 5),
+                                      (B, 1.5, 0.4, 6)):
+            _sparkle(cv, x + dx * r, y + dy * r, size, mix(CYAN, (255, 255, 255), 0.5))
+    elif DECOR == "dims":  # blueprint dimension line under the grid - home span
+        y = G[1] + r + 34
+        cv.line([(G[0], y), (H[0], y)], INK, 1, alpha=110)
+        for x in (G[0], H[0]):
+            cv.line([(x, y - 7), (x, y + 7)], INK, 1, alpha=110)
+            d = 1 if x == G[0] else -1
+            cv.d.polygon([((x) * SS, y * SS), ((x + 8 * d) * SS, (y - 3) * SS), ((x + 8 * d) * SS, (y + 3) * SS)],
+                         fill=INK + (130,))
+        cv.text(((G[0] + H[0]) / 2, y - 7), "ENERGY FLOW", 9, MUTED, "semi", anchor="mb", spacing=2)
 
 
 def _sun_arc(cv, v, cx, cy, rx, ry, labels=True):
@@ -593,16 +882,35 @@ def _power_chart(cv, v, x, y, w, h, compact=False, solar_only=False):
         cv.d.rectangle([X(i * 15) * SS, (y + h + 1) * SS, X((i + 1) * 15) * SS, (y + h + 4) * SS],
                        fill=period_color(period) + (170,))
 
+    if len(pts) > 1 and CHART == "bars":  # hourly solar bars
+        hours = {}
+        for p in pts:
+            hours.setdefault(p[0] // 60, []).append(p[1] or 0)
+        bw = w / 24
+        for hr, vals in hours.items():
+            top = Y(sum(vals) / len(vals))
+            cv.d.rounded_rectangle([(x + hr * bw + bw * 0.16) * SS, top * SS, (x + (hr + 1) * bw - bw * 0.16) * SS,
+                                    (y + h) * SS], radius=min(bw * 0.2, 4) * SS, fill=SOLAR + (215,))
     if len(pts) > 1:
         poly = [(X(p[0]), Y(p[1] or 0)) for p in pts]
-        area = Image.new("L", (C, C), 0)
+        if CHART == "steps":  # 30-minute steps
+            buckets = {}
+            for p in pts:
+                buckets.setdefault(p[0] // 30, []).append(p[1] or 0)
+            poly = []
+            for b in sorted(buckets):
+                level = Y(sum(buckets[b]) / len(buckets[b]))
+                poly += [(X(b * 30), level), (X(min(b * 30 + 30, pts[-1][0])), level)]
+        area = Image.new("L", cv.img.size, 0)
         ImageDraw.Draw(area).polygon([(px * SS, py * SS) for px, py in poly + [(poly[-1][0], y + h), (poly[0][0], y + h)]], fill=255)
-        grad = Image.new("RGB", (C, C), SOLAR)
-        fade = Image.linear_gradient("L").resize((C, max(int(h * SS), 1))).point(lambda val: 255 - int(val * 0.8))
-        mask = Image.new("L", (C, C), 0)
+        grad = Image.new("RGB", cv.img.size, SOLAR)
+        fade = Image.linear_gradient("L").resize((cv.img.size[0], max(int(h * SS), 1))).point(lambda val: 255 - int(val * 0.8))
+        mask = Image.new("L", cv.img.size, 0)
         mask.paste(fade, (0, int(y * SS)))
-        cv.img.paste(grad, (0, 0), ImageChops.multiply(area, mask).point(lambda val: int(val * 0.55)))
-        cv.line(poly, SOLAR, 2 if compact else 2.2, glow=4 if compact else 5)
+        if CHART in ("area", "steps"):
+            cv.img.paste(grad, (0, 0), ImageChops.multiply(area, mask).point(lambda val: int(val * 0.55)))
+        if CHART != "bars":
+            cv.line(poly, SOLAR, 2 if compact else 2.2, glow=4 if compact else 5)
         if not solar_only:
             cv.line([(X(p[0]), Y(max(p[3] or 0, 0))) for p in pts], GRID, 1.6, glow=3, alpha=230)
             cv.line([(X(p[0]), Y(p[2] or 0)) for p in pts], HOME, 1.8 if compact else 2.2, glow=4)
@@ -1316,7 +1624,7 @@ def page_placeholder(page: str, data: dict) -> bytes:
     for i in range(12):  # spinner: fading arc segments
         a0 = i * 30 - 90
         col = mix(BG_BOTTOM, CYAN, (i + 1) / 12)
-        cv.arc(cx, cy, 64, a0, a0 + 22, 8, col, col, glow=4 if i > 8 else 0, track=False)
+        cv.arc(cx, cy, 64, a0, a0 + 22, 8, col, col, glow=4 if i > 8 else 0, track=False, plain=True)
     cv.circle(cx, cy, 36, outline=INK + (40,), width=1.5)
     for i, line in enumerate(PLACEHOLDER_TEXT):
         cv.text((cx, cy + 120 + i * 34), line, 24, TEXT if i == 0 else MUTED, "semi", anchor="mm")
