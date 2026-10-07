@@ -278,12 +278,12 @@ class Canvas:
     def _header(self, page):
         self.text((24, 18), "INNOVO", 13, CYAN, "bold", spacing=4)
         self.text((24, 34), TITLES[page], 30, TEXT, "bold", spacing=2)
-        if self.data.get("_bare"):  # template screens: no clock, status or data
-            return
         now = self.data["now"]
         right = self.W - 24
         self.text((right, 20), now.strftime("%H:%M"), 30, TEXT, "bold", anchor="ra")
         self.text((right, 54), now.strftime("%a %d %b").upper(), 13, MUTED, "semi", anchor="ra", spacing=1)
+        if self.data.get("_bare"):  # template screens: time stamp only, no status or data
+            return
         status = self.data.get("inverter") or "Waiting"
         col = BATT if status == "Producing" else RED if status.startswith(("Fault", "Offline")) else MUTED
         self.circle(self.W - 170, 40, 4, fill=col + (255,), glow=0)
