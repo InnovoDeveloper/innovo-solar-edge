@@ -313,6 +313,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Integration removed: take down the published screens and viewer page."""
+    from .snapshot import CONF_PUBLISH_DIR, remove_published
+
+    if folder := entry.options.get(CONF_PUBLISH_DIR):
+        await hass.async_add_executor_job(remove_published, folder)
+
+
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle an options update."""
     await hass.config_entries.async_reload(entry.entry_id)

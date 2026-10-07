@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Energy Screens</title>
+<style>
+  :root {
+    --bg: #060912; --bg2: #0a1120; --card: rgba(255,255,255,.05); --line: rgba(255,255,255,.12);
+    --text: #ecf1f7; --muted: #808ea2; --cyan: #00e5ff; --solar: #ffc400;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: linear-gradient(180deg, var(--bg), var(--bg2)) fixed; color: var(--text);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  header { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 8px 24px;
+           padding: 18px 16px 10px; max-width: 1400px; margin: 0 auto; }
+  .brand { font-size: 12px; letter-spacing: .3em; color: var(--cyan); font-weight: 700; }
+  h1 { margin: 2px 0 0; font-size: 26px; letter-spacing: .06em; text-transform: uppercase; }
+  .status { color: var(--muted); font-size: 13px; }
+  .status b { color: var(--text); font-weight: 600; }
+  main { max-width: 1400px; margin: 0 auto; padding: 0 16px 32px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 8px 0 14px; }
+  .group { display: flex; flex-wrap: wrap; gap: 6px; }
+  .label { color: var(--muted); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; margin-right: 2px; align-self: center; }
+  button {
+    background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 999px;
+    padding: 7px 13px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: rgba(0,229,255,.5); }
+  button[aria-pressed="true"] { background: rgba(0,229,255,.14); border-color: var(--cyan); color: #fff; }
+  .viewer { display: grid; place-items: center; background: var(--card); border: 1px solid var(--line);
+            border-radius: 16px; padding: 12px; min-height: 240px; }
+  .viewer img { display: block; max-width: 100%; max-height: calc(100vh - 230px); border-radius: 10px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between;
+          margin-top: 10px; color: var(--muted); font-size: 13px; }
+  .meta code { color: var(--text); background: rgba(255,255,255,.06); padding: 3px 8px; border-radius: 6px;
+               word-break: break-all; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 14px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px; cursor: pointer;
+          text-align: left; color: inherit; }
+  .tile img { width: 100%; height: auto; border-radius: 8px; display: block; background: #000; }
+  .tile span { display: block; margin-top: 8px; font-size: 13px; color: var(--muted); }
+  .tile span b { color: var(--text); font-weight: 600; }
+  .hidden { display: none !important; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 18px; }
+  @media (max-width: 600px) { h1 { font-size: 20px; } .viewer img { max-height: none; } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="brand">INNOVO</div>
+    <h1>Energy Screens</h1>
+  </div>
+  <div class="status" id="status">Loading…</div>
+</header>
+<main>
+  <div class="bar">
+    <span class="label">View</span>
+    <div class="group" id="views"></div>
+  </div>
+  <div class="bar">
+    <span class="label">Shape</span>
+    <div class="group" id="shapes"></div>
+    <span class="label">Size</span>
+    <div class="group" id="sizes"></div>
+    <span class="label">Mode</span>
+    <div class="group" id="modes"></div>
+  </div>
+
+  <section id="single">
+    <div class="viewer"><img id="screen" alt=""></div>
+    <div class="meta">
+      <span id="caption"></span>
+      <code id="url"></code>
+    </div>
+  </section>
+  <section id="gallery" class="grid hidden"></section>
+
+  <p class="note">Screens refresh by themselves every minute (other shapes every 2 minutes).
+    Use the address shown under the picture in a controller; add <code>?t=</code> plus the time so it is never cached.</p>
+</main>
+
+<script>
+(() => {
+  const TITLES = {
+    "overview": "Overview", "overview-slot": "Overview · open card", "overview-flow": "Overview · flow only",
+    "live": "Live", "today": "Today", "battery": "Battery", "money": "Money", "solar": "Solar Health", "week": "Week",
+  };
+  const SHAPE_NAMES = { "1x1": "Square", "16x9": "16:9", "4x3": "4:3", "9x10": "9:10", "9x16": "9:16" };
+  const store = (k, v) => { try { v === undefined ? 0 : localStorage.setItem("ise." + k, v); return localStorage.getItem("ise." + k); } catch (e) { return null; } };
+  const state = { view: store("view") || "overview", shape: store("shape") || "1x1", res: store("res") || "lowres",
+                  mode: store("mode") || "single", info: null, slide: null };
+  const $ = id => document.getElementById(id);
+  const file = (view, shape, res) => `${view}-${shape}-${res}.jpg`;
+  const bust = () => `?t=${Math.floor(Date.now() / 1000)}`;
+
+  function buttons(el, items, current, onPick) {
+    el.innerHTML = "";
+    for (const [value, text] of items) {
+      const b = document.createElement("button");
+      b.textContent = text;
+      b.setAttribute("aria-pressed", String(value === current));
+      b.onclick = () => onPick(value);
+      el.appendChild(b);
+    }
+  }
+
+  function draw() {
+    const info = state.info;
+    if (!info) return;
+    if (!info.pages.includes(state.view)) state.view = info.pages[0];
+    if (!info.shapes[state.shape]) state.shape = "1x1";
+    buttons($("views"), info.pages.map(p => [p, TITLES[p] || p]), state.view, v => pick("view", v));
+    buttons($("shapes"), Object.keys(info.shapes).map(s => [s, SHAPE_NAMES[s] || s]), state.shape, v => pick("shape", v));
+    buttons($("sizes"), [["lowres", "Low-res"], ["hires", "Hi-res"]], state.res, v => pick("res", v));
+    buttons($("modes"), [["single", "Single"], ["gallery", "All views"], ["slideshow", "Slideshow"]], state.mode, v => pick("mode", v));
+    const gallery = state.mode === "gallery";
+    $("single").classList.toggle("hidden", gallery);
+    $("gallery").classList.toggle("hidden", !gallery);
+    gallery ? drawGallery() : drawSingle();
+  }
+
+  function drawSingle() {
+    const name = file(state.view, state.shape, state.res);
+    $("screen").src = name + bust();
+    $("screen").alt = `${TITLES[state.view] || state.view} screen`;
+    const size = state.info.shapes[state.shape][state.res];
+    $("caption").textContent = `${TITLES[state.view] || state.view} · ${SHAPE_NAMES[state.shape] || state.shape} · ${size}`;
+    $("url").textContent = new URL(name, location.href).href;
+  }
+
+  function drawGallery() {
+    const g = $("gallery");
+    g.innerHTML = "";
+    for (const view of state.info.pages) {
+      const t = document.createElement("button");
+      t.className = "tile";
+      t.innerHTML = `<img alt="" loading="lazy"><span><b></b></span>`;
+      t.querySelector("img").src = file(view, state.shape, "lowres") + bust();
+      t.querySelector("b").textContent = TITLES[view] || view;
+      t.onclick = () => { state.view = view; store("view", view); pick("mode", "single"); };
+      g.appendChild(t);
+    }
+  }
+
+  function pick(key, value) {
+    state[key] = value;
+    store(key, value);
+    clearInterval(state.slide);
+    state.slide = null;
+    if (state.mode === "slideshow") {
+      state.slide = setInterval(() => {
+        const p = state.info.pages;
+        state.view = p[(p.indexOf(state.view) + 1) % p.length];
+        draw();
+      }, 10000);
+    }
+    draw();
+  }
+
+  async function load() {
+    try {
+      const r = await fetch("screens.json" + bust(), { cache: "no-store" });
+      if (!r.ok) throw new Error(r.status);
+      state.info = await r.json();
+      const when = state.info.updated ? new Date(state.info.updated) : null;
+      $("status").innerHTML = when ? `Updated <b>${when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</b>` : "";
+    } catch (e) {
+      $("status").textContent = "The energy screens are not available right now.";
+    }
+    draw();
+  }
+
+  document.addEventListener("keydown", e => {
+    if (!state.info || state.mode === "gallery") return;
+    const p = state.info.pages, i = p.indexOf(state.view);
+    if (e.key === "ArrowRight") pick("view", p[(i + 1) % p.length]);
+    if (e.key === "ArrowLeft") pick("view", p[(i - 1 + p.length) % p.length]);
+  });
+
+  load();
+  if (state.mode === "slideshow") pick("mode", "slideshow");
+  setInterval(load, 60000);
+})();
+</script>
+</body>
+</html>

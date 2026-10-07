@@ -957,29 +957,53 @@ def _solar_chart(cv, v, x, y, w, h, compact=False):
     return _power_chart(cv, data, x, y, w, h, compact=compact, solar_only=True)
 
 
-def page_overview_solar(data: dict) -> bytes:
-    cv = Canvas("overview", data)
+def page_overview_solar(data: dict, variant: str | None = None, shape: str = "1x1") -> bytes:
+    """Overview for solar-only sites (no meter, no battery), with the same layouts per
+    shape and the same variants as page_overview: "slot" - the Today card is an empty
+    frame; "flow" - only Solar now; every other card is an empty frame, no clock."""
+    lay = OVERVIEW_LAYOUTS[shape]
+    cv = Canvas("overview", {**data, "_bare": variant == "flow"}, *lay["size"])
     v, cur = data, data["currency"]
     t = v.get("today") or {}
-    cv.card(24, 88, 420, 300)
-    cv.text((40, 100), "SOLAR NOW", 11, MUTED, "semi", spacing=2)
-    _sun_arc(cv, v, 234, 190, 175, 70, labels=False)
-    _solar_gauge(cv, v, 234, 268, 92, 14, 46)
 
-    cv.card(456, 88, 240, 300)
-    cv.text((472, 100), "TODAY", 11, MUTED, "semi", spacing=2)
-    produced = t.get("solar")
-    cv.glow_text((576, 172), "—" if produced is None else f"{produced:.1f}", 54, SOLAR, "bold")
-    cv.text((576, 212), "kWh PRODUCED", 12, MUTED, "semi", anchor="mm", spacing=2)
-    typical, vs = v.get("typical_today"), v.get("today_vs_typical")
-    cv.arc(576, 300, 46, -90, -90 + 360 * min((vs or 0) / 100, 1), 9, SOLAR2, SOLAR, glow=5)
-    cv.text((576, 300), "—" if vs is None else f"{vs:.0f}%", 20, TEXT, "bold", anchor="mm")
-    cv.text((576, 362), f"OF TYPICAL {typical:.1f} kWh" if typical else "OF TYPICAL", 11, MUTED, "semi", anchor="mm", spacing=1)
+    # solar now (where the live flow is on a full site)
+    x, y, w, h = lay["flow"]
+    cv.card(x, y, w, h)
+    cv.text((x + 16, y + 12), "SOLAR NOW", 11, MUTED, "semi", spacing=2)
+    k = min(max(min(w / 420, h / 300), 1), 1.35)
+    cx = x + w / 2
+    _sun_arc(cv, v, cx, y + h * 0.34, min(w * 0.417, 175 * k * 1.4), 70 * h / 300, labels=False)
+    _solar_gauge(cv, v, cx, y + h * 0.6, 92 * k, 14, round(46 * k))
 
-    cv.card(24, 400, 672, 176)
-    cv.text((40, 412), "SOLAR TODAY", 11, MUTED, "semi", spacing=2)
-    _solar_chart(cv, v, 40, 436, 640, 104, compact=True)
+    # today (where the battery is on a full site)
+    cv.card(*lay["battery"])
+    if variant == "flow":
+        cv.card(*lay["chart"])
+        for tile in lay["tiles"]:
+            cv.card(*tile)
+        return cv.png()
+    if variant != "slot":
+        x, y, w, h = lay["battery"]
+        k = min(max(min(w / 240, h / 300), 0.8), 1.3)
+        bx = x + w / 2
+        cv.text((x + 16, y + 12), "TODAY", 11, MUTED, "semi", spacing=2)
+        produced = t.get("solar")
+        cv.glow_text((bx, y + h * 0.28), "—" if produced is None else f"{produced:.1f}", round(54 * k), SOLAR, "bold")
+        cv.text((bx, y + h * 0.413), "kWh PRODUCED", 12, MUTED, "semi", anchor="mm", spacing=2)
+        typical, vs = v.get("typical_today"), v.get("today_vs_typical")
+        ry = y + h * 0.707
+        cv.arc(bx, ry, 46 * k, -90, -90 + 360 * min((vs or 0) / 100, 1), 9, SOLAR2, SOLAR, glow=5)
+        cv.text((bx, ry), "—" if vs is None else f"{vs:.0f}%", 20, TEXT, "bold", anchor="mm")
+        cv.text((bx, y + h * 0.913), f"OF TYPICAL {typical:.1f} kWh" if typical else "OF TYPICAL", 11, MUTED,
+                "semi", anchor="mm", spacing=1)
 
+    # today's chart
+    x, y, w, h = lay["chart"]
+    cv.card(x, y, w, h)
+    cv.text((x + 16, y + 12), "SOLAR TODAY", 11, MUTED, "semi", spacing=2)
+    _solar_chart(cv, v, x + 16, y + 36, w - 32, h - 72, compact=True)
+
+    # key numbers
     pcol = period_color(v.get("period"))
     eff = v.get("efficiency")
     clean = v.get("cleaning")
@@ -990,12 +1014,12 @@ def page_overview_solar(data: dict) -> bytes:
         ("PANELS VS SPEC", "—" if eff is None else f"{eff:.0f}%",
          f"{(v.get('health') or '—').upper()}{'  ·  CLEAN' if clean == 'Yes' else ''}", RED if clean == "Yes" else SOLAR),
     ]
-    for i, (label, value, sub, col) in enumerate(tiles):
-        x = 24 + i * 170
-        cv.card(x, 588, 160, 102, accent=col)
-        cv.text((x + 16, 600), label, 11, MUTED, "semi", spacing=1)
-        cv.text((x + 16, 618), value, 32, col, "bold")
-        cv.text((x + 16, 674), sub, 10, MUTED, "semi", anchor="ls", spacing=1)
+    for (label, value, sub, col), (x, y, w, h) in zip(tiles, lay["tiles"]):
+        big = h >= 130
+        cv.card(x, y, w, h, accent=col)
+        cv.text((x + 16, y + 12), label, 11, MUTED, "semi", spacing=1)
+        cv.text((x + 16, y + (40 if big else 30)), value, 40 if big else 32, col, "bold")
+        cv.text((x + 16, y + h - 16), sub, 10, MUTED, "semi", anchor="ls", spacing=1)
     return cv.png()
 
 
@@ -1223,7 +1247,8 @@ def render_image(page: str, data: dict, backdrop: Image.Image | None = None,
     _RAW.on, _RAW.bg = True, backdrop
     try:
         if has_layout(page, data):
-            return page_overview(data, VARIANTS.get(page), shape)
+            draw = page_overview_solar if data.get("has_grid") is False else page_overview
+            return draw(data, VARIANTS.get(page), shape)
         if page in VARIANTS:
             page = "overview"
         return render(page, data)
@@ -1233,8 +1258,7 @@ def render_image(page: str, data: dict, backdrop: Image.Image | None = None,
 
 def has_layout(page: str, data: dict) -> bool:
     """Pages drawn natively at every shape (the rest are centred on a wider background)."""
-    return (page == "overview" or page in VARIANTS) and is_ready("overview", data) \
-        and data.get("has_grid") is not False
+    return (page == "overview" or page in VARIANTS) and is_ready("overview", data)
 
 
 def _backdrop(width: int, height: int, x0: int, y0: int) -> Image.Image:

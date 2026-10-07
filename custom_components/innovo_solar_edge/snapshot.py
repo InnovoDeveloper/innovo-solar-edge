@@ -15,6 +15,7 @@ low-res) - for a folder another web server on the box already serves over HTTP.
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 import os
 import secrets
@@ -32,6 +33,8 @@ _LOGGER = logging.getLogger(__name__)
 
 CONF_SNAPSHOT_FILE = "energy_snapshot_file"
 CONF_PUBLISH_DIR = "energy_publish_dir"
+SITE_PAGE = "index.html"  # viewer page written next to the screens
+SITE_INFO = "screens.json"
 SHAPES_EVERY = 2  # publish the non-square shapes every N minutes (a full set is ~17 s of CPU on an 8-core ARM box)
 INTERVAL = datetime.timedelta(seconds=60)
 SLOW_PAGES = {"solar": 10, "week": 10}  # redraw every N minutes
@@ -256,6 +259,7 @@ class SnapshotPublisher:
                 square = files.get(f"{name}-1x1-lowres.jpg")
                 if square:
                     _write_atomic(os.path.join(folder, f"{name}.jpg"), square)
+            self._write_site(folder, data)
             self._publish_error = None
         except OSError as err:
             if getattr(self, "_publish_error", None) != str(err):  # log each new problem once
@@ -263,6 +267,45 @@ class SnapshotPublisher:
                 _LOGGER.warning("Can't write the screens to %s: %s", folder, err)
         _LOGGER.debug("Published %d screens (%s) in %.1f s", len(names), shapes or "all shapes",
                       time.monotonic() - started)
+
+
+    def _write_site(self, folder: str, data: dict) -> None:
+        """The viewer page (index.html, once per start) and screens.json (each publish)."""
+        pages = [p for p in PAGES + list(VARIANTS) if not (p == "battery" and data.get("has_battery") is False)]
+        info = {
+            "updated": dt_util.utcnow().isoformat(),
+            "pages": pages,
+            "shapes": {shape: {res: f"{w}x{h}" for res, (w, h) in sizes.items()} for shape, sizes in FORMATS.items()},
+            "solar_only": data.get("has_grid") is False,
+        }
+        _write_atomic(os.path.join(folder, SITE_INFO), json.dumps(info).encode())
+        if not getattr(self, "_site_written", False):
+            with open(os.path.join(os.path.dirname(__file__), "web", SITE_PAGE), "rb") as handle:
+                _write_atomic(os.path.join(folder, SITE_PAGE), handle.read())
+            self._site_written = True
+
+
+def published_names() -> list[str]:
+    """Every file the publisher can write, for clean-up when the integration is removed."""
+    names = [SITE_PAGE, SITE_INFO]
+    for page in PAGES + list(VARIANTS):
+        names.append(f"{page}.jpg")
+        names += [f"{page}-{shape}-{res}.jpg" for shape, sizes in FORMATS.items() for res in sizes]
+    return names
+
+
+def remove_published(folder: str) -> None:
+    """Delete the published screens and viewer page (not the folder's other files)."""
+    for name in published_names():
+        for path in (os.path.join(folder, name), os.path.join(folder, name) + ".tmp"):
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+    try:
+        os.rmdir(folder)  # only if nothing else is in it
+    except OSError:
+        pass
 
 
 def _write_atomic(target: str, data: bytes) -> None:
