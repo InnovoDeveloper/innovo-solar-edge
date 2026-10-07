@@ -760,6 +760,9 @@ class SolaredgeModbusMultiOptionsFlowHandler(OptionsFlow):
                 "energy_publish_dir": self.config_entry.options.get(
                     "energy_publish_dir"
                 ),
+                "energy_publish_png": self.config_entry.options.get(
+                    "energy_publish_png", False
+                ),
             }
 
         return self.async_show_form(
@@ -826,6 +829,11 @@ class SolaredgeModbusMultiOptionsFlowHandler(OptionsFlow):
                             "suggested_value": user_input.get("energy_publish_dir")
                         },
                     ): str,
+                    # Innovo: also write transparent PNGs next to the JPGs
+                    vol.Optional(
+                        "energy_publish_png",
+                        default=user_input.get("energy_publish_png", False),
+                    ): cv.boolean,
                 },
             ),
             errors=errors,

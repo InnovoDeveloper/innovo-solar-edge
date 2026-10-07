@@ -313,6 +313,9 @@ class Canvas:
         return ImageChops.screen(self.img, glow)
 
     def png(self):
+        if getattr(_RAW, "layers", False):  # transparent(): the crisp layer and the blurred glow
+            glow = self.glow.filter(ImageFilter.GaussianBlur(9)).resize(self.img.size, Image.BILINEAR)
+            return self.img, glow
         if getattr(_RAW, "on", False):  # render_image(): hand back the full-size picture
             return self.full()
         out = self.full().resize((self.W, self.H), Image.LANCZOS)
@@ -1240,11 +1243,12 @@ JPEG_QUALITY = 88
 
 
 def render_image(page: str, data: dict, backdrop: Image.Image | None = None,
-                 shape: str = "1x1") -> Image.Image:
+                 shape: str = "1x1", layers: bool = False):
     """A page (or an overview variant) as a full-size picture (2x working size).
     The overview family has its own layout per shape; other pages are square
-    (optionally drawn on a given background slice, see fit())."""
-    _RAW.on, _RAW.bg = True, backdrop
+    (optionally drawn on a given background slice, see fit()). With layers=True
+    returns (crisp layer, blurred glow layer) instead, for transparent()."""
+    _RAW.on, _RAW.bg, _RAW.layers = True, backdrop, layers
     try:
         if has_layout(page, data):
             draw = page_overview_solar if data.get("has_grid") is False else page_overview
@@ -1253,7 +1257,7 @@ def render_image(page: str, data: dict, backdrop: Image.Image | None = None,
             page = "overview"
         return render(page, data)
     finally:
-        _RAW.on, _RAW.bg = False, None
+        _RAW.on, _RAW.bg, _RAW.layers = False, None, False
 
 
 def has_layout(page: str, data: dict) -> bool:
@@ -1302,21 +1306,64 @@ def fit(page: str, data: dict, width: int, height: int, shape: str = "1x1") -> I
     return back.resize((width, height), Image.LANCZOS)
 
 
+def transparent(page: str, data: dict, width: int, height: int, shape: str = "1x1") -> Image.Image:
+    """A page with a transparent background (cards translucent, glows kept in colour),
+    as RGBA at width x height. Drawn twice - on black and on white - and the
+    difference gives the exact transparency of every pixel."""
+    import numpy as np
+
+    native = has_layout(page, data)
+    if native:
+        w, h = OVERVIEW_LAYOUTS[shape]["size"]
+        size = (w * SS, h * SS)
+    else:
+        size = (C, C)
+    (black, glow), (white, _) = (
+        render_image(page, data, Image.new("RGB", size, colour), shape if native else "1x1", layers=True)
+        for colour in ((0, 0, 0), (255, 255, 255))
+    )
+    B = np.asarray(black, dtype=np.float32) / 255
+    W = np.asarray(white, dtype=np.float32) / 255
+    G = np.asarray(glow, dtype=np.float32) / 255
+    alpha = np.clip(1 - (W - B).max(axis=2), 0, 1)
+    colour = 1 - (1 - B) * (1 - G)  # premultiplied content, with the glow screen-blended on
+    alpha = np.maximum(alpha, colour.max(axis=2))
+    colour = colour / np.maximum(alpha, 1e-4)[..., None]
+    rgba = np.dstack([np.clip(colour, 0, 1), alpha]) * 255
+    img = Image.fromarray(rgba.round().astype(np.uint8), "RGBA")
+    if native or width == height:
+        return img.resize((width, height), Image.LANCZOS)
+    side = min(width, height)  # square page: centred on a clear picture of the shape
+    out = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    out.paste(img.resize((side, side), Image.LANCZOS), ((width - side) // 2, (height - side) // 2))
+    return out
+
+
+def png(img: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, "PNG", compress_level=6)
+    return buf.getvalue()
+
+
 def jpeg(img: Image.Image) -> bytes:
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=JPEG_QUALITY, optimize=True, progressive=True)
     return buf.getvalue()
 
 
-def export(page: str, data: dict, shapes=None) -> dict[str, bytes]:
-    """Every shape (or the given ones) and size of one page:
-    {"overview-16x9-hires.jpg": bytes, ...}."""
+def export(page: str, data: dict, shapes=None, kinds=("jpg",)) -> dict[str, bytes]:
+    """Every shape (or the given ones) and size of one page, as JPG and/or transparent
+    PNG: {"overview-16x9-hires.jpg": bytes, "overview-16x9-hires.png": bytes, ...}."""
     files = {}
     for shape, sizes in FORMATS.items():
         if shapes is not None and shape not in shapes:
             continue
-        big = fit(page, data, *sizes["hires"], shape=shape)
-        for res, (w, h) in sizes.items():
-            img = big if (w, h) == big.size else big.resize((w, h), Image.LANCZOS)
-            files[f"{page}-{shape}-{res}.jpg"] = jpeg(img)
+        for kind in kinds:
+            if kind == "png":
+                big = transparent(page, data, *sizes["hires"], shape=shape)
+            else:
+                big = fit(page, data, *sizes["hires"], shape=shape)
+            for res, (w, h) in sizes.items():
+                img = big if (w, h) == big.size else big.resize((w, h), Image.LANCZOS)
+                files[f"{page}-{shape}-{res}.{kind}"] = png(img) if kind == "png" else jpeg(img)
     return files

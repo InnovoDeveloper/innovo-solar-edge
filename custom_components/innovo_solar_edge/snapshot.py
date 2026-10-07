@@ -10,6 +10,7 @@ overview variants (overview-slot, overview-flow) are also written there as JPG
 with fixed names, <page>-<shape>-<res>.jpg for each shape in screens.FORMATS
 (1x1, 16x9, 4x3, 9x10, 9x16) in hires and lowres, plus <page>.jpg (square,
 low-res) - for a folder another web server on the box already serves over HTTP.
+With the PNG option, the same names are also written as transparent .png.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ _LOGGER = logging.getLogger(__name__)
 
 CONF_SNAPSHOT_FILE = "energy_snapshot_file"
 CONF_PUBLISH_DIR = "energy_publish_dir"
+CONF_PUBLISH_PNG = "energy_publish_png"  # also transparent PNGs
 SITE_PAGE = "index.html"  # viewer page written next to the screens
 SITE_INFO = "screens.json"
 SHAPES_EVERY = 2  # publish the non-square shapes every N minutes (a full set is ~17 s of CPU on an 8-core ARM box)
@@ -193,6 +195,10 @@ class SnapshotPublisher:
     def publish_dir(self) -> str | None:
         return self.model.entry.options.get(CONF_PUBLISH_DIR) or None
 
+    @property
+    def publish_kinds(self) -> tuple[str, ...]:
+        return ("jpg", "png") if self.model.entry.options.get(CONF_PUBLISH_PNG) else ("jpg",)
+
     def publish_path(self, page: str) -> str | None:
         folder = self.publish_dir
         return os.path.join(folder, f"{page}.jpg") if folder else None
@@ -230,12 +236,17 @@ class SnapshotPublisher:
             if self.file_enabled:
                 await self.hass.async_add_executor_job(self._write_file, page, png)
         self.model.notify()
-        if self.publish_dir:
+        if self.publish_dir and not getattr(self, "_publishing", False):
             # every shape of the pages drawn this tick (+ the overview variants);
-            # the non-square shapes less often, as they cost several renders each
+            # the non-square shapes less often, as they cost several renders each.
+            # Skipped while the previous round is still running (PNGs take a while).
             shapes = None if force or self._ticks % SHAPES_EVERY == 0 else ["1x1"]
             names = pages + (list(VARIANTS) if "overview" in pages else [])
-            await self.hass.async_add_executor_job(self._publish, names, data, shapes)
+            self._publishing = True
+            try:
+                await self.hass.async_add_executor_job(self._publish, names, data, shapes)
+            finally:
+                self._publishing = False
 
     def _write_file(self, page: str, image: bytes) -> None:
         folder = self.hass.config.path("www", WWW_DIR)
@@ -250,15 +261,16 @@ class SnapshotPublisher:
             os.makedirs(folder, exist_ok=True)
             for name in names:
                 try:
-                    files = export(name, data, shapes)
+                    files = export(name, data, shapes, self.publish_kinds)
                 except Exception:
                     _LOGGER.exception("Publishing the %s screen failed", name)
                     continue
                 for file_name, image in files.items():
                     _write_atomic(os.path.join(folder, file_name), image)
-                square = files.get(f"{name}-1x1-lowres.jpg")
-                if square:
-                    _write_atomic(os.path.join(folder, f"{name}.jpg"), square)
+                for kind in self.publish_kinds:
+                    square = files.get(f"{name}-1x1-lowres.{kind}")
+                    if square:
+                        _write_atomic(os.path.join(folder, f"{name}.{kind}"), square)
             self._write_site(folder, data)
             self._publish_error = None
         except OSError as err:
@@ -277,6 +289,7 @@ class SnapshotPublisher:
             "pages": pages,
             "shapes": {shape: {res: f"{w}x{h}" for res, (w, h) in sizes.items()} for shape, sizes in FORMATS.items()},
             "solar_only": data.get("has_grid") is False,
+            "formats": list(self.publish_kinds),
         }
         _write_atomic(os.path.join(folder, SITE_INFO), json.dumps(info).encode())
         if not getattr(self, "_site_written", False):
@@ -289,8 +302,9 @@ def published_names() -> list[str]:
     """Every file the publisher can write, for clean-up when the integration is removed."""
     names = [SITE_PAGE, SITE_INFO]
     for page in PAGES + list(VARIANTS):
-        names.append(f"{page}.jpg")
-        names += [f"{page}-{shape}-{res}.jpg" for shape, sizes in FORMATS.items() for res in sizes]
+        for kind in ("jpg", "png"):
+            names.append(f"{page}.{kind}")
+            names += [f"{page}-{shape}-{res}.{kind}" for shape, sizes in FORMATS.items() for res in sizes]
     return names
 
 
@@ -373,6 +387,7 @@ class DashboardImageUrl(_base(), SensorEntity):
             "pages": {p: snap.url_path(p) for p in PAGES} if snap.file_enabled else None,
             "publish_dir": snap.publish_dir,
             "published_files": "<page>-<shape>-<res>.jpg" if snap.publish_dir else None,
+            "published_formats": list(snap.publish_kinds) if snap.publish_dir else None,
             "published_pages": PAGES + list(VARIANTS) if snap.publish_dir else None,
             "published_shapes": {shape: {res: f"{w}x{h}" for res, (w, h) in sizes.items()}
                                  for shape, sizes in FORMATS.items()} if snap.publish_dir else None,

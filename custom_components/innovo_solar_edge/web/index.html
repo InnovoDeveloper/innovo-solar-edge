@@ -54,6 +54,7 @@
   .tile img:hover { outline: 1px solid rgba(0,229,255,.5); }
   .tile .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
   .tile b { font-size: 13px; font-weight: 600; }
+  .checker img, img.checker { background: repeating-conic-gradient(#3a3f4b 0 25%, #262a33 0 50%) 0 0 / 20px 20px; }
   .hidden { display: none !important; }
   .note { color: var(--muted); font-size: 12px; margin-top: 18px; }
   @media (max-width: 600px) { h1 { font-size: 20px; } .viewer img { max-height: none; } }
@@ -83,6 +84,8 @@
     <div class="group" id="shapes"></div>
     <span class="label">Size</span>
     <div class="group" id="sizes"></div>
+    <span class="label hidden" id="fmt-label">Format</span>
+    <div class="group hidden" id="formats"></div>
     <span class="label">Mode</span>
     <div class="group" id="modes"></div>
     <button id="play" class="play" type="button" aria-pressed="false" title="Play the screens one after another (Space)"></button>
@@ -116,10 +119,11 @@
   const save = (k, v) => { try { localStorage.setItem("ise." + k, v); } catch (e) {} };
   const load = k => { try { return localStorage.getItem("ise." + k); } catch (e) { return null; } };
   const state = { view: load("view") || "overview", shape: load("shape") || "1x1", res: load("res") || "lowres",
-                  mode: load("mode") === "gallery" ? "gallery" : "single", playing: false, info: null, timer: null };
+                  mode: load("mode") === "gallery" ? "gallery" : "single", fmt: load("fmt") || "jpg",
+                  playing: false, info: null, timer: null };
   const $ = id => document.getElementById(id);
   const icon = name => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
-  const file = (view, shape, res) => `${view}-${shape}-${res}.jpg`;
+  const file = (view, shape, res) => `${view}-${shape}-${res}.${state.fmt}`;
   const address = name => new URL(name, location.href).href;
   const bust = () => `?t=${Math.floor(Date.now() / 1000)}`;
   const title = view => TITLES[view] || view;
@@ -173,6 +177,13 @@
     if (!info) return;
     if (!info.pages.includes(state.view)) state.view = info.pages[0];
     if (!info.shapes[state.shape]) state.shape = "1x1";
+    const formats = info.formats || ["jpg"];
+    if (!formats.includes(state.fmt)) state.fmt = "jpg";
+    const several = formats.length > 1;
+    $("fmt-label").classList.toggle("hidden", !several);
+    $("formats").classList.toggle("hidden", !several);
+    buttons($("formats"), formats.map(f => [f, f === "png" ? "PNG (transparent)" : "JPG"]), state.fmt, v => pick("fmt", v));
+    document.body.classList.toggle("checker", state.fmt === "png");
     buttons($("views"), info.pages.map(p => [p, title(p)]), state.view, v => pick("view", v));
     buttons($("shapes"), Object.keys(info.shapes).map(s => [s, SHAPE_NAMES[s] || s]), state.shape, v => pick("shape", v));
     buttons($("sizes"), [["lowres", "Low-res"], ["hires", "Hi-res"]], state.res, v => pick("res", v));
@@ -190,7 +201,7 @@
     $("screen").src = name + bust();
     $("screen").alt = `${title(state.view)} screen`;
     const size = state.info.shapes[state.shape][state.res];
-    $("caption").textContent = `${title(state.view)} · ${SHAPE_NAMES[state.shape] || state.shape} · ${size}`;
+    $("caption").textContent = `${title(state.view)} · ${SHAPE_NAMES[state.shape] || state.shape} · ${size} · ${state.fmt.toUpperCase()}`;
     $("url").textContent = address(name);
   }
 

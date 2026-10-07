@@ -117,10 +117,12 @@
           "energy_price_entity": "Electricity price sensor ($/kWh) for daily cost",
           "energy_typical_lookup": "Look up typical solar output from NREL PVWatts (sends approximate home location)",
           "energy_snapshot_file": "Publish the dashboard image as a file under /local (no login needed; unguessable name)",
-          "energy_publish_dir": "Also publish the screens as JPG files to this folder (optional)"
+          "energy_publish_dir": "Also publish the screens as JPG files to this folder (optional)",
+          "energy_publish_png": "Also publish transparent PNG versions"
         },
         "data_description": {
-          "energy_publish_dir": "Full path of a folder another web server on this machine already serves, e.g. a local web folder. Each screen is written there as overview.jpg, live.jpg, today.jpg, battery.jpg, money.jpg, solar.jpg and week.jpg, with fixed names and no login. Leave empty to turn off."
+          "energy_publish_dir": "Full path of a folder another web server on this machine already serves, e.g. a local web folder. Each screen is written there as overview.jpg, live.jpg, today.jpg, battery.jpg, money.jpg, solar.jpg and week.jpg, with fixed names and no login. Leave empty to turn off.",
+          "energy_publish_png": "Writes every screen a second time as a PNG with a transparent background (same names, .png), so it blends into the controller's own background. Uses about twice the processing of the JPGs."
         }
       },
       "rate_plan": {
