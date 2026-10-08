@@ -415,7 +415,8 @@ def orbit(c: Ctx):
 
 
 def prism(c: Ctx):
-    """The sun's beam enters a prism and leaves as coloured rays to home, battery and grid."""
+    """The sun's beam enters a prism and leaves as coloured rays to home, battery and grid
+    (only rays that reach something are drawn)."""
     S, cv, u, f = c.S, c.cv, c.u, c.f
     x, y, w, h = c.x, c.y, c.w, c.h
     sun = (x + w * 0.11, y + h * 0.2)
@@ -435,11 +436,6 @@ def prism(c: Ctx):
         c.flow([a, b], colour, watts)
 
     beam((sun[0] + 26 * u, sun[1] + 14 * u), entry, S.mix(S.SOLAR, (255, 255, 255), 0.55), f["s"], alpha=90)
-    # rainbow fan as the light leaves the prism
-    spectrum = [(255, 64, 64), (255, 150, 40), (255, 230, 60), (80, 220, 110), (60, 170, 255), (110, 90, 255), (200, 80, 230)]
-    for i, col in enumerate(spectrum):
-        a = math.radians(-18 + i * 6)
-        cv.line([exit_, (exit_[0] + math.cos(a) * 70 * u, exit_[1] + math.sin(a) * 70 * u)], col, 1.6 * u + 0.4, alpha=150)
     homep = (x + w * 0.84, y + h * 0.2)
     battp = (x + w * 0.88, y + h * 0.56)
     gridp = (x + w * 0.66, y + h * 0.88)
