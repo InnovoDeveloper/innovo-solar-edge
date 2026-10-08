@@ -41,6 +41,7 @@ CONF_PUBLISH_PNG = "energy_publish_png"  # also transparent PNGs
 SITE_PAGE = "index.html"  # viewer page written next to the screens
 SITE_INFO = "screens.json"
 PREVIEWS = "previews"     # one thumbnail per graphics style, for the design picker
+PAGE_VERSION = "1.13.1"    # must match PAGE_VERSION in web/index.html (old cached pages reload)
 MAX_LOOKS = 4             # generated looks published live (each costs a full render round)
 LOOK_RE = re.compile(r"^([a-z]+)--([a-z]+)-([a-z]+)$")
 CLEANABLE = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".tmp", ".html", ".json", ".tgz")
@@ -281,23 +282,38 @@ class SnapshotPublisher:
         _LOGGER.info("Cleaned %d unused screen files/folders from %s", removed, self.publish_dir)
         return removed
 
-    def _clean(self) -> int:
+    def _cleanable(self) -> list[dict]:
+        """What a clean-up would delete: folders and loose files no look uses
+        (only images, pages, json and archives - anything else is left alone)."""
         folder = self.publish_dir
         keep = {SITE_PAGE, SITE_INFO, PREVIEWS, *self.looks, *published_names()}
-        removed = 0
-        for entry in os.listdir(folder):
+        out = []
+        for entry in sorted(os.listdir(folder)):
             if entry in keep:
                 continue
             path = os.path.join(folder, entry)
             if os.path.isdir(path) and not os.path.islink(path):
-                files = [f for _, _, fs in os.walk(path) for f in fs]
-                if all(f.lower().endswith(CLEANABLE) for f in files):  # only screens / previews / samples
-                    shutil.rmtree(path, ignore_errors=True)
-                    removed += 1
+                files = [os.path.join(r, f) for r, _, fs in os.walk(path) for f in fs]
+                if all(f.lower().endswith(CLEANABLE) for f in files):
+                    out.append({"name": entry + "/", "files": len(files), "bytes": sum(os.path.getsize(f) for f in files)})
             elif entry.lower().endswith(CLEANABLE):
+                out.append({"name": entry, "files": 1, "bytes": os.path.getsize(path)})
+        return out
+
+    def _clean(self) -> int:
+        removed = 0
+        for item in self._cleanable():
+            path = os.path.join(self.publish_dir, item["name"].rstrip("/"))
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:
                 os.remove(path)
-                removed += 1
+            removed += 1
         return removed
+
+    def _folder_stats(self, sub: str) -> dict:
+        files = [os.path.join(r, f) for r, _, fs in os.walk(os.path.join(self.publish_dir, sub)) for f in fs]
+        return {"files": len(files), "bytes": sum(os.path.getsize(f) for f in files if os.path.exists(f))}
 
     async def async_command(self, action: str, payload: dict) -> dict:
         """Requests from the viewer page (webhook)."""
@@ -454,8 +470,10 @@ class SnapshotPublisher:
             "solar_only": data.get("has_grid") is False,
             "formats": list(self.publish_kinds),
             "looks": [{"key": look, "style": LOOK_RE.match(look).group(1), "palette": LOOK_RE.match(look).group(2),
-                       "mode": LOOK_RE.match(look).group(3), "ready": look in self._ready_looks}
+                       "mode": LOOK_RE.match(look).group(3), "ready": look in self._ready_looks, **self._folder_stats(look)}
                       for look in self.looks if LOOK_RE.match(look)],
+            "cleanable": self._cleanable(),
+            "page_version": PAGE_VERSION,
             "max_looks": MAX_LOOKS,
             "styles": [{"key": k, "label": v["label"], "blurb": BLURBS.get(k, ""), "preview": f"{PREVIEWS}/{k}.jpg"}
                        for k, v in STYLES.items()],

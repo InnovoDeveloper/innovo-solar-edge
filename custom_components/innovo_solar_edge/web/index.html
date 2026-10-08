@@ -78,6 +78,18 @@
   .checker img, img.checker { background: repeating-conic-gradient(#3a3f4b 0 25%, #262a33 0 50%) 0 0 / 20px 20px; }
   .footer { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; justify-content: space-between; margin-top: 18px; }
   .note { color: var(--muted); font-size: 12px; margin: 0; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: grid; place-items: center; padding: 16px; z-index: 10; }
+  .dialog { background: #0e1626; border: 1px solid var(--line); border-radius: 16px; max-width: 560px; width: 100%;
+            padding: 18px 20px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+  .dialog h3 { margin: 0 0 8px; font-size: 18px; }
+  .dialog p { margin: 6px 0; color: #c4ccd8; font-size: 14px; }
+  .dialog ul { margin: 6px 0 10px; padding-left: 20px; max-height: 40vh; overflow: auto; }
+  .dialog li { margin: 3px 0; font-size: 13.5px; }
+  .dialog li code { font-size: 12.5px; }
+  .dialog .kept { color: var(--muted); font-size: 13px; }
+  .dialog .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+  .dialog .warn { color: #ffc400; }
+  button.delete { background: var(--red); border-color: var(--red); color: #fff; font-weight: 700; }
   .hidden { display: none !important; }
   @media (max-width: 600px) { h1 { font-size: 20px; } .viewer img { max-height: none; } }
 </style>
@@ -154,6 +166,16 @@
   </div>
   <p class="msg" id="actmsg"></p>
 </main>
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="m-title">
+  <div class="dialog">
+    <h3 id="m-title"></h3>
+    <div id="m-body"></div>
+    <div class="actions">
+      <button id="m-cancel" type="button">Cancel</button>
+      <button id="m-ok" class="delete" type="button">Delete</button>
+    </div>
+  </div>
+</div>
 
 <script>
 (() => {
@@ -163,13 +185,14 @@
   };
   const SHAPE_NAMES = { "1x1": "Square", "16x9": "16:9", "4x3": "4:3", "9x10": "9:10", "9x16": "9:16" };
   const PLAY_SECONDS = 8;
+  const PAGE_VERSION = "1.13.1";  // kept equal to the integration version (see refresh())
   const save = (k, v) => { try { localStorage.setItem("ise." + k, v); } catch (e) {} };
   const load = k => { try { return localStorage.getItem("ise." + k); } catch (e) { return null; } };
   const state = {
     view: load("view") || "overview", shape: load("shape") || "1x1", res: load("res") || "lowres",
     mode: load("mode") === "gallery" ? "gallery" : "single", fmt: load("fmt") || "jpg", look: load("look") || "",
     design: { style: "neon", palette: "neon", mode: "dark" }, designing: false, pending: null,
-    playing: false, info: null, timer: null,
+    playing: false, info: null, timer: null, shown: "", galleryKey: "", loading: null,
   };
   const $ = id => document.getElementById(id);
   const icon = name => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
@@ -332,7 +355,14 @@
 
   function drawSingle() {
     const name = file(state.view, state.shape, state.res);
-    $("screen").src = name + bust();
+    const key = `${name}|${state.info.updated}`;
+    if (key !== state.shown) {  // load the new picture in the background, then swap it in (no blank flashes)
+      state.shown = key;
+      const pre = new Image();
+      state.loading = pre;
+      pre.onload = () => { if (state.loading === pre) $("screen").src = pre.src; };
+      pre.src = name + bust();
+    }
     $("screen").alt = `${title(state.view)} screen`;
     const size = state.info.shapes[state.shape][state.res];
     const look = state.look ? lookName(byKey(state.info.looks, state.look)) : "Original";
@@ -341,6 +371,9 @@
   }
 
   function drawGallery() {
+    const key = [state.look, state.shape, state.res, state.fmt, state.info.pages.join(), state.info.updated].join("|");
+    if (key === state.galleryKey) return;  // unchanged: keep the tiles that are already loaded
+    state.galleryKey = key;
     const g = $("gallery"); g.innerHTML = "";
     for (const view of state.info.pages) {
       const tile = document.createElement("div"); tile.className = "tile";
@@ -385,6 +418,27 @@
     if (state.playing) setPlaying(true);
   }
 
+  // ---- confirmation dialog ----
+  const size = b => b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`;
+  const esc = t => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  function ask(title, html, okText, danger = true, cancel = true) {
+    return new Promise(resolve => {
+      $("m-title").textContent = title;
+      $("m-body").innerHTML = html;
+      $("m-ok").textContent = okText;
+      $("m-ok").className = danger ? "delete" : "primary";
+      $("m-cancel").classList.toggle("hidden", !cancel);
+      $("modal").classList.remove("hidden");
+      const onKey = e => { if (e.key === "Escape") done(false); };
+      const done = ok => { $("modal").classList.add("hidden"); document.removeEventListener("keydown", onKey); resolve(ok); };
+      document.addEventListener("keydown", onKey);
+      $("m-ok").onclick = () => done(true);
+      $("m-cancel").onclick = () => done(false);
+      $("modal").onclick = e => { if (e.target === $("modal")) done(false); };
+      (cancel ? $("m-cancel") : $("m-ok")).focus();
+    });
+  }
+
   // ---- generate / remove / clean ----
   async function generate() {
     const d = state.design, key = `${d.style}--${d.palette}-${d.mode}`, msg = $("genmsg");
@@ -417,7 +471,14 @@
   }
   $("remove").onclick = async () => {
     const l = byKey(state.info.looks, state.look);
-    if (!l || !confirm(`Remove the look "${lookName(l)}" and delete its images?\nAny controller using its addresses will stop updating.`)) return;
+    if (!l) return;
+    const example = address(`${l.key}/overview-16x9-lowres.jpg`);
+    const ok = await ask(`Remove "${lookName(l)}"?`,
+      `<p>This permanently deletes:</p><ul><li><code>${esc(l.key)}/</code> &mdash; ${l.files || 0} images (${size(l.bytes || 0)})</li></ul>` +
+      `<p class="warn">Any controller or panel showing this look's addresses (for example <code>${esc(example)}</code>) will stop updating.</p>` +
+      `<p class="kept">The original screens and your other looks are not touched. You can generate this look again later.</p>`,
+      "Remove look");
+    if (!ok) return;
     const msg = $("actmsg"); msg.classList.remove("err"); msg.textContent = "Removing…";
     if (await command({ action: "remove", look: l.key }, msg)) {
       state.look = ""; save("look", "");
@@ -425,7 +486,21 @@
     }
   };
   $("clean").onclick = async () => {
-    if (!confirm("Delete every image and folder here that isn't the original screens or one of your looks?")) return;
+    const items = state.info.cleanable || [];
+    const looks = (state.info.looks || []).map(l => `<li>${esc(lookName(l))} &mdash; <code>${esc(l.key)}/</code></li>`).join("");
+    const kept = `<p class="kept">Kept: the original screens, the style previews${looks ? " and your looks:" : "."}</p>` +
+      (looks ? `<ul class="kept">${looks}</ul>` : "");
+    if (!items.length) {
+      await ask("Nothing to clean up", `<p>Every image here is in use.</p>${kept}`, "OK", false, false);
+      return;
+    }
+    const total = items.reduce((a, i) => a + (i.bytes || 0), 0), files = items.reduce((a, i) => a + (i.files || 0), 0);
+    const list = items.map(i => `<li><code>${esc(i.name)}</code> &mdash; ${i.files} ${i.files === 1 ? "file" : "files"} (${size(i.bytes)})</li>`).join("");
+    const ok = await ask("Clean up unused images?",
+      `<p>This permanently deletes ${files} files (${size(total)}) that no look uses:</p><ul>${list}</ul>${kept}` +
+      `<p class="warn">Anything that still points at these addresses will stop showing a picture.</p>`,
+      "Delete unused images");
+    if (!ok) return;
     const msg = $("actmsg"); msg.classList.remove("err"); msg.textContent = "Cleaning up…";
     if (await command({ action: "clean" }, msg)) setTimeout(async () => { await refresh(); msg.textContent = "Cleaned up."; }, 3000);
   };
@@ -437,6 +512,11 @@
       const r = await fetch("screens.json" + bust(), { cache: "no-store" });
       if (!r.ok) throw new Error(r.status);
       state.info = await r.json();
+      const v = state.info.page_version;
+      if (v && v !== PAGE_VERSION && !location.search.includes(`v=${v}`)) {  // a cached older page: load the new one
+        location.replace(`index.html?v=${encodeURIComponent(v)}`);
+        return;
+      }
       const when = state.info.updated ? new Date(state.info.updated) : null;
       $("status").innerHTML = when ? `Updated <b>${when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</b>` : "";
     } catch (e) {
