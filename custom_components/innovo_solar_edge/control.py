@@ -9,6 +9,7 @@ local network. The actions are harmless (publish or delete screen images).
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
 import logging
@@ -40,12 +41,14 @@ class ControlServer:
         self.snapshot = snapshot
         self.port = port
         self._runner: web.AppRunner | None = None
+        self._preview_lock = asyncio.Lock()
 
     async def async_start(self) -> bool:
         app = web.Application(client_max_size=64 * 1024)
         app.router.add_route("OPTIONS", "/{tail:.*}", self._options)
         app.router.add_get("/ping", self._ping)
         app.router.add_post("/command", self._command)
+        app.router.add_get("/preview", self._preview)
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
         try:
@@ -70,6 +73,23 @@ class ControlServer:
         if not _local(request.remote):
             return web.json_response({"error": "local network only"}, status=403, headers=_HEADERS)
         return web.json_response({"ok": True}, headers=_HEADERS)
+
+    async def _preview(self, request: web.Request) -> web.Response:
+        """GET /preview?style=&palette=&mode=&page=&shape= -> JPEG of a look not generated yet.
+        One at a time; a request that arrives while another is drawing waits its turn."""
+        if not _local(request.remote):
+            return web.json_response({"error": "local network only"}, status=403, headers=_HEADERS)
+        q = request.query
+        try:
+            async with self._preview_lock:
+                image = await self.snapshot.async_preview(q.get("style", ""), q.get("palette", ""), q.get("mode", "dark"),
+                                                          q.get("page", "overview"), q.get("shape", "1x1"))
+        except ValueError as err:
+            return web.json_response({"error": str(err)}, status=400, headers=_HEADERS)
+        except Exception as err:  # noqa: BLE001 - shown on the page
+            _LOGGER.exception("Preview failed")
+            return web.json_response({"error": str(err)}, status=500, headers=_HEADERS)
+        return web.Response(body=image, content_type="image/jpeg", headers=_HEADERS)
 
     async def _command(self, request: web.Request) -> web.Response:
         if not _local(request.remote):

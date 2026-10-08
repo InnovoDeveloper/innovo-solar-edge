@@ -42,7 +42,7 @@ CONF_PUBLISH_PNG = "energy_publish_png"  # also transparent PNGs
 SITE_PAGE = "index.html"  # viewer page written next to the screens
 SITE_INFO = "screens.json"
 PREVIEWS = "previews"     # one thumbnail per graphics style, for the design picker
-PAGE_VERSION = "1.14.2"    # must match PAGE_VERSION in web/index.html (old cached pages reload)
+PAGE_VERSION = "1.15.0"    # must match PAGE_VERSION in web/index.html (old cached pages reload)
 MAX_LOOKS = 4
 PREVIEW_EVERY = 6 * 3600  # seconds between style thumbnail refreshes             # generated looks published live (each costs a full render round)
 LOOK_RE = re.compile(r"^([a-z]+)--([a-z]+)-([a-z]+)$")
@@ -353,6 +353,20 @@ class SnapshotPublisher:
         files = [os.path.join(r, f) for r, _, fs in os.walk(os.path.join(self.publish_dir, sub)) for f in fs]
         return {"files": len(files), "bytes": sum(os.path.getsize(f) for f in files if os.path.exists(f))}
 
+    async def async_preview(self, style: str, palette: str, mode: str, page: str = "overview",
+                            shape: str = "1x1") -> bytes:
+        """One screen in a look that hasn't been generated, drawn now from live data and
+        returned as JPEG - nothing is written to disk."""
+        look = self.look_key(style, palette, mode)  # validates (ValueError)
+        if page not in PAGES + list(VARIANTS) or shape not in FORMATS:
+            raise ValueError(f"Unknown page {page!r} or shape {shape!r}")
+        data = self.look_data(screen_data(self.model), look)
+
+        def draw() -> bytes:
+            return export(page, data, [shape], ("jpg",))[f"{page}-{shape}-lowres.jpg"]
+
+        return await self.hass.async_add_executor_job(draw)
+
     async def async_command(self, action: str, payload: dict) -> dict:
         """Requests from the viewer page (control.py)."""
         if action == "generate":
@@ -515,7 +529,7 @@ class SnapshotPublisher:
             "palettes": [{"key": k, "label": v["label"], "dark": hexes(v["dark"]), "light": hexes(v["light"])}
                          for k, v in THEMES.items()],
             "modes": [[m, MODE_LABELS[m]] for m in MODES],
-            "control": {"port": CONTROL_PORT},
+            "control": {"port": CONTROL_PORT, "preview": True},
         }
         _write_atomic(os.path.join(folder, SITE_INFO), json.dumps(info).encode())
         due = time.monotonic() - getattr(self, "_previews_at", -1e9) > PREVIEW_EVERY

@@ -44,6 +44,20 @@
   .look-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
   .look-pill .dot.busy { background: #ffc400; }
   .panel { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px 16px; margin: 0 0 16px; }
+  @media (min-width: 1100px) {
+    #designer:not(.hidden) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(380px, 40%); gap: 22px; align-items: start; }
+    .designer-preview { order: 2; position: sticky; top: 12px; }
+    .designer-pick .styles { grid-template-columns: repeat(auto-fill, minmax(min(138px, 100%), 1fr)); }
+  }
+  .preview-wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin: 2px 0 6px; }
+  .preview-stage { position: relative; display: grid; place-items: center; min-height: 260px; background: rgba(0,0,0,.25);
+                   border: 1px solid var(--line); border-radius: 14px; padding: 10px; }
+  .preview-stage img { display: block; max-width: 100%; max-height: 52vh; border-radius: 8px; }
+  .preview-stage .spinner { position: absolute; }
+  .preview-stage .loading { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(6,9,18,.45);
+                            border-radius: 14px; }
+  #preview-name { text-transform: none; letter-spacing: normal; color: var(--text); font-size: 14px; margin-left: 6px; }
+  .preview-bar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
   .styles { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); gap: 10px; }
   .style-card { display: block; text-align: left; border-radius: 12px; padding: 6px; }
   .style-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; border-radius: 8px; background: #000; }
@@ -122,6 +136,21 @@
   </div>
 
   <section id="designer" class="panel hidden" aria-label="Design a new look">
+    <aside class="designer-preview">
+    <div id="preview-box" class="preview-wrap hidden">
+        <h2>Preview <span class="msg" id="preview-name"></span></h2>
+        <div class="preview-stage">
+          <img id="preview" alt="Preview of the chosen look">
+          <div id="preview-loading" class="loading hidden"><div class="spinner"></div></div>
+        </div>
+        <div class="preview-bar">
+          <span class="label">View</span><div class="group" id="pv-pages"></div>
+          <span class="label">Shape</span><div class="group" id="pv-shapes"></div>
+          <span class="msg" id="pv-msg"></span>
+        </div>
+      </div>
+    </aside>
+    <div class="designer-pick">
     <h2>1 · Design</h2>
     <div class="styles" id="styles"></div>
     <h2>2 · Colours</h2>
@@ -131,6 +160,7 @@
     <div class="gen-row">
       <button id="generate" class="primary" type="button">Generate</button>
       <span class="msg" id="genmsg"></span>
+    </div>
     </div>
   </section>
 
@@ -195,13 +225,14 @@
   const SHAPE_NAMES = { "1x1": "Square", "16x9": "16:9", "4x3": "4:3", "9x10": "9:10", "9x16": "9:16" };
   const PLAY_SECONDS = 8;
   const OPENED = Date.now();  // fresh copies of the style thumbnails each time the page is opened
-  const PAGE_VERSION = "1.14.2";  // kept equal to the integration version (see refresh())
+  const PAGE_VERSION = "1.15.0";  // kept equal to the integration version (see refresh())
   const save = (k, v) => { try { localStorage.setItem("ise." + k, v); } catch (e) {} };
   const load = k => { try { return localStorage.getItem("ise." + k); } catch (e) { return null; } };
   const state = {
     view: load("view") || "overview", shape: load("shape") || "1x1", res: load("res") || "lowres",
     mode: load("mode") === "gallery" ? "gallery" : "single", fmt: load("fmt") || "jpg", look: load("look") || "",
     design: { style: "neon", palette: "neon", mode: "dark" }, designing: false, pending: null,
+    pv: { page: "overview", shape: "1x1", key: "", timer: null, abort: null, url: null },
     playing: false, info: null, timer: null, shown: "", galleryKey: "", loading: null,
     removed: new Set(),  // looks removed from this page; hidden until the box's list catches up
   };
@@ -311,8 +342,59 @@
     n.setAttribute("aria-pressed", String(state.designing));
     n.disabled = activeLooks().length >= (state.info.max_looks || 4);
     n.title = n.disabled ? `Up to ${state.info.max_looks || 4} looks - remove one first` : "Design a new look";
-    n.onclick = () => { state.designing = !state.designing; draw(); };
+    n.onclick = () => { state.designing = !state.designing; state.pv.shape = state.shape; state.pv.key = ""; draw(); };
     el.appendChild(n);
+  }
+
+  // ---- live preview of the chosen combination (drawn by the box on request, nothing saved) ----
+  function previewUrl() {
+    const c = (state.info || {}).control || {};
+    if (!c.port || !c.preview) return null;
+    const d = state.design, q = new URLSearchParams({ style: d.style, palette: d.palette, mode: d.mode,
+                                                       page: state.pv.page, shape: state.pv.shape });
+    return `http://${location.hostname}:${c.port}/preview?${q}`;
+  }
+  function schedulePreview() {
+    clearTimeout(state.pv.timer);
+    state.pv.timer = setTimeout(loadPreview, 180);  // quick clicks: only the last one is drawn
+  }
+  async function loadPreview() {
+    const url = previewUrl();
+    $("preview-box").classList.toggle("hidden", !url);
+    if (!url || !state.designing) return;
+    const key = url;
+    if (key === state.pv.key) return;
+    state.pv.key = key;
+    if (state.pv.abort) state.pv.abort.abort();
+    const ctrl = new AbortController();
+    state.pv.abort = ctrl;
+    $("preview-loading").classList.remove("hidden");
+    $("pv-msg").textContent = ""; $("pv-msg").classList.remove("err");
+    try {
+      const r = await fetch(url + `&t=${Date.now()}`, { signal: ctrl.signal });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+      const blob = await r.blob();
+      if (ctrl.signal.aborted) return;
+      if (state.pv.url) URL.revokeObjectURL(state.pv.url);
+      state.pv.url = URL.createObjectURL(blob);
+      $("preview").src = state.pv.url;
+      $("preview-loading").classList.add("hidden");
+    } catch (e) {
+      if (e.name === "AbortError") return;
+      state.pv.key = "";
+      $("preview-loading").classList.add("hidden");
+      $("pv-msg").classList.add("err");
+      $("pv-msg").textContent = `Couldn't draw the preview (${e.message}).`;
+    }
+  }
+  function drawPreviewControls() {
+    const info = state.info;
+    const pages = ["overview", "live", "overview-flow", "today"].filter(p => info.pages.includes(p));
+    buttons($("pv-pages"), pages.map(p => [p, title(p)]), state.pv.page, v => { state.pv.page = v; drawPreviewControls(); schedulePreview(); });
+    buttons($("pv-shapes"), Object.keys(info.shapes).map(sh => [sh, SHAPE_NAMES[sh] || sh]), state.pv.shape,
+            v => { state.pv.shape = v; drawPreviewControls(); schedulePreview(); });
+    const d = state.design;
+    $("preview-name").textContent = `· ${lookName({ style: d.style, palette: d.palette, mode: d.mode })}`;
   }
 
   function drawDesigner() {
@@ -343,6 +425,8 @@
       pa.appendChild(b);
     }
     buttons($("lookmodes"), info.modes || [], d.mode, v => { d.mode = v; drawDesigner(); });
+    drawPreviewControls();
+    schedulePreview();
     const key = `${d.style}--${d.palette}-${d.mode}`;
     const exists = activeLooks().some(l => l.key === key);
     $("generate").disabled = Boolean(state.pending);
