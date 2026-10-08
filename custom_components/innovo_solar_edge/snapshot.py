@@ -31,7 +31,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
-from .screens import FORMATS, PAGES, SIZE, VARIANTS, export, render
+from .control import CONTROL_PORT
+from .screens import FORMATS, PAGES, SIZE, VARIANTS, export, is_ready, render
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,8 +42,9 @@ CONF_PUBLISH_PNG = "energy_publish_png"  # also transparent PNGs
 SITE_PAGE = "index.html"  # viewer page written next to the screens
 SITE_INFO = "screens.json"
 PREVIEWS = "previews"     # one thumbnail per graphics style, for the design picker
-PAGE_VERSION = "1.13.1"    # must match PAGE_VERSION in web/index.html (old cached pages reload)
-MAX_LOOKS = 4             # generated looks published live (each costs a full render round)
+PAGE_VERSION = "1.14.2"    # must match PAGE_VERSION in web/index.html (old cached pages reload)
+MAX_LOOKS = 4
+PREVIEW_EVERY = 6 * 3600  # seconds between style thumbnail refreshes             # generated looks published live (each costs a full render round)
 LOOK_RE = re.compile(r"^([a-z]+)--([a-z]+)-([a-z]+)$")
 CLEANABLE = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".tmp", ".html", ".json", ".tgz")
 SHAPES_EVERY = 2  # publish the non-square shapes every N minutes (a full set is ~17 s of CPU on an 8-core ARM box)
@@ -185,7 +187,8 @@ class SnapshotPublisher:
         self._ticks = 0
         self._ready = False
         self._lock = asyncio.Lock()       # one publish round at a time (ticks, generate, clean)
-        self._ready_looks: set[str] = set()
+        self._urgent: list[str] = []      # new looks waiting for their first pictures (served between screens)
+        self._serving = False
         if not model.data.get("snapshot_secret"):
             model.data["snapshot_secret"] = secrets.token_urlsafe(12)
             model.save_soon()
@@ -249,6 +252,8 @@ class SnapshotPublisher:
                 raise HomeAssistantError(f"Up to {MAX_LOOKS} looks; remove one first")
             self.looks.append(look)
             self.model.save_soon()
+        if look not in self._urgent:
+            self._urgent.append(look)
         if wait:
             await self._publish_new_look(look)
         else:
@@ -256,18 +261,43 @@ class SnapshotPublisher:
         return look
 
     async def _publish_new_look(self, look: str) -> None:
+        """A new look jumps the queue: if a publish round is running, it draws the look
+        between two screens; otherwise it is drawn right now."""
         data = screen_data(self.model)
-        async with self._lock:
-            await self.hass.async_add_executor_job(self._write_site, self.publish_dir, data)  # shows "generating"
-            await self.hass.async_add_executor_job(self._publish_looks, PAGES + list(VARIANTS), data, None, [look])
-            await self.hass.async_add_executor_job(self._write_site, self.publish_dir, data)
+        await self.hass.async_add_executor_job(self._write_site, self.publish_dir, data)  # lists it as "generating" now
+        if not self._lock.locked():
+            async with self._lock:
+                await self.hass.async_add_executor_job(self._serve_urgent, data)
+
+    def _serve_urgent(self, data: dict) -> None:
+        """First pictures for new looks: every view in the square shape (JPG) in a few
+        seconds, then the other shapes; called between screens of a running round."""
+        if self._serving or not self._urgent:
+            return
+        self._serving = True
+        try:
+            while self._urgent:
+                look = self._urgent.pop(0)
+                if look not in self.looks:
+                    continue
+                names = PAGES + list(VARIANTS)
+                self._publish_looks(names, data, ["1x1"], [look], kinds=("jpg",))
+                self._write_site(self.publish_dir, data)  # ready to view
+                others = [shape for shape in FORMATS if shape != "1x1"]
+                self._publish_looks(names, data, others, [look], kinds=("jpg",))
+                self._write_site(self.publish_dir, data)
+        finally:
+            self._serving = False
 
     async def async_remove(self, look: str) -> None:
         if look in self.looks:
             self.looks.remove(look)  # stops publishing it straight away
             self.model.save_soon()
-        self._ready_looks.discard(look)
+        if look in self._urgent:
+            self._urgent.remove(look)
         if self.publish_dir and LOOK_RE.match(look):
+            # drop it from screens.json now; delete the folder once the current round is done
+            await self.hass.async_add_executor_job(self._write_site, self.publish_dir, screen_data(self.model))
             async with self._lock:
                 await self.hass.async_add_executor_job(shutil.rmtree, os.path.join(self.publish_dir, look), True)
                 await self.hass.async_add_executor_job(self._write_site, self.publish_dir, screen_data(self.model))
@@ -311,12 +341,20 @@ class SnapshotPublisher:
             removed += 1
         return removed
 
+    def _look_info(self, look: str) -> dict:
+        style, palette, mode = LOOK_RE.match(look).groups()
+        last = (PAGES + list(VARIANTS))[-1]  # written last in each round
+        shapes = [shape for shape in FORMATS
+                  if os.path.exists(os.path.join(self.publish_dir, look, f"{last}-{shape}-lowres.jpg"))]
+        return {"key": look, "style": style, "palette": palette, "mode": mode, "shapes": shapes,
+                "ready": "1x1" in shapes and look not in self._urgent, **self._folder_stats(look)}
+
     def _folder_stats(self, sub: str) -> dict:
         files = [os.path.join(r, f) for r, _, fs in os.walk(os.path.join(self.publish_dir, sub)) for f in fs]
         return {"files": len(files), "bytes": sum(os.path.getsize(f) for f in files if os.path.exists(f))}
 
     async def async_command(self, action: str, payload: dict) -> dict:
-        """Requests from the viewer page (webhook)."""
+        """Requests from the viewer page (control.py)."""
         if action == "generate":
             look = await self.async_generate(payload.get("style", ""), payload.get("palette", ""), payload.get("mode", ""),
                                              wait=False)
@@ -387,6 +425,7 @@ class SnapshotPublisher:
         try:
             os.makedirs(folder, exist_ok=True)
             for name in names:
+                self._serve_urgent(data)  # a new look waiting? draw it first
                 try:
                     files = export(name, data, shapes, self.publish_kinds)
                 except Exception:
@@ -408,8 +447,9 @@ class SnapshotPublisher:
                       time.monotonic() - started)
 
 
-    def _publish_looks(self, names: list[str], data: dict, shapes, looks: list[str]) -> None:
+    def _publish_looks(self, names: list[str], data: dict, shapes, looks: list[str], kinds=None) -> None:
         """Each generated look in its own folder: <publish dir>/<look>/<page>-<shape>-<res>.jpg"""
+        kinds = kinds or self.publish_kinds
         for look in looks:
             if not LOOK_RE.match(look):
                 continue
@@ -418,18 +458,17 @@ class SnapshotPublisher:
                 os.makedirs(sub, exist_ok=True)
                 styled = self.look_data(data, look)
                 for name in names:
+                    self._serve_urgent(data)  # a new look waiting? draw it first
                     try:
-                        files = export(name, styled, shapes, self.publish_kinds)
+                        files = export(name, styled, shapes, kinds)
                     except Exception:
                         _LOGGER.exception("Publishing the %s screen in look %s failed", name, look)
                         continue
                     for file_name, image in files.items():
                         _write_atomic(os.path.join(sub, file_name), image)
-                    for kind in self.publish_kinds:
+                    for kind in kinds:
                         if square := files.get(f"{name}-1x1-lowres.{kind}"):
                             _write_atomic(os.path.join(sub, f"{name}.{kind}"), square)
-                if shapes is None:
-                    self._ready_looks.add(look)
             except OSError as err:
                 _LOGGER.warning("Can't write look %s: %s", look, err)
 
@@ -443,8 +482,6 @@ class SnapshotPublisher:
         os.makedirs(sub, exist_ok=True)
         for style in STYLES:
             target = os.path.join(sub, f"{style}.jpg")
-            if os.path.exists(target):
-                continue
             try:
                 png = render("live", {**data, "_style": style, "_theme": f"{default_palette(style)}-dark"})
                 img = Image.open(io.BytesIO(png)).convert("RGB").resize((360, 360), Image.LANCZOS)
@@ -469,9 +506,7 @@ class SnapshotPublisher:
             "shapes": {shape: {res: f"{w}x{h}" for res, (w, h) in sizes.items()} for shape, sizes in FORMATS.items()},
             "solar_only": data.get("has_grid") is False,
             "formats": list(self.publish_kinds),
-            "looks": [{"key": look, "style": LOOK_RE.match(look).group(1), "palette": LOOK_RE.match(look).group(2),
-                       "mode": LOOK_RE.match(look).group(3), "ready": look in self._ready_looks, **self._folder_stats(look)}
-                      for look in self.looks if LOOK_RE.match(look)],
+            "looks": [self._look_info(look) for look in self.looks if LOOK_RE.match(look)],
             "cleanable": self._cleanable(),
             "page_version": PAGE_VERSION,
             "max_looks": MAX_LOOKS,
@@ -480,12 +515,12 @@ class SnapshotPublisher:
             "palettes": [{"key": k, "label": v["label"], "dark": hexes(v["dark"]), "light": hexes(v["light"])}
                          for k, v in THEMES.items()],
             "modes": [[m, MODE_LABELS[m]] for m in MODES],
-            "control": {"webhook": self.model.data.get("webhook_id"),
-                        "port": getattr(api, "port", 8123), "ssl": bool(getattr(api, "use_ssl", False))},
+            "control": {"port": CONTROL_PORT},
         }
         _write_atomic(os.path.join(folder, SITE_INFO), json.dumps(info).encode())
-        if not getattr(self, "_previews_written", False):
-            self._previews_written = True
+        due = time.monotonic() - getattr(self, "_previews_at", -1e9) > PREVIEW_EVERY
+        if due and is_ready("live", data):  # never thumbnails of the "gathering data" placeholder
+            self._previews_at = time.monotonic()
             self._write_previews(folder, data)
         if not getattr(self, "_site_written", False):
             with open(os.path.join(os.path.dirname(__file__), "web", SITE_PAGE), "rb") as handle:

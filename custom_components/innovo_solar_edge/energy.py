@@ -155,7 +155,6 @@ class EnergyModel:
             "snapshot_secret": stored.get("snapshot_secret"),
             "peak_dc": stored.get("peak_dc") or {},
             "looks": stored.get("looks") or [],          # generated screen looks (snapshot.py)
-            "webhook_id": stored.get("webhook_id"),      # viewer page -> integration requests
             "series": stored.get("series") or {"date": None, "pts": []},
             "provisioned": stored.get("provisioned"),
             "battery_seen": stored.get("battery_seen"),
