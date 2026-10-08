@@ -40,7 +40,7 @@ sys.path.insert(0, PKG)
 import themes  # noqa: E402
 from screens import FORMATS, PAGES, VARIANTS, export, is_ready, render  # noqa: E402
 
-VERSION = "1.16.0"            # also PAGE_VERSION in web/index.html
+VERSION = "1.16.1"            # also PAGE_VERSION in web/index.html
 SITE_PAGE, SITE_INFO, PREVIEWS = "index.html", "screens.json", "previews"
 MAX_LOOKS = 4
 SHAPES_EVERY = 2              # non-square shapes every N minutes
@@ -198,6 +198,9 @@ class WebApp:
                 if look in self.looks:
                     self.publish_look(look, data, NAMES, [s for s in FORMATS if s != "1x1"], ("jpg",))
                     self.write_site()
+                if look in self.looks and "png" in self.kinds:  # then the transparent PNGs, square first
+                    self.publish_look(look, data, NAMES, list(FORMATS), ("png",))
+                    self.write_site()
         finally:
             self._serving = False
 
@@ -207,6 +210,7 @@ class WebApp:
         sub = os.path.join(self.folder, PREVIEWS)
         os.makedirs(sub, exist_ok=True)
         for style in themes.STYLES:
+            self.serve_urgent(data)  # a new look goes first
             self._yield_to_previews()
             try:
                 with self.render_lock:
@@ -302,9 +306,12 @@ class WebApp:
     def look_info(self, look: str) -> dict:
         style, palette, mode = LOOK_RE.match(look).groups()
         sub = os.path.join(self.folder, look)
-        shapes = [s for s in FORMATS if os.path.exists(os.path.join(sub, f"{NAMES[-1]}-{s}-lowres.jpg"))]
+        # a shape is there once the last page of a round (NAMES[-1]) is written for it
+        formats = {kind: [s for s in FORMATS if os.path.exists(os.path.join(sub, f"{NAMES[-1]}-{s}-lowres.{kind}"))]
+                   for kind in self.kinds}
+        shapes = formats.get("jpg", [])
         files = [os.path.join(r, f) for r, _, fs in os.walk(sub) for f in fs]
-        return {"key": look, "style": style, "palette": palette, "mode": mode, "shapes": shapes,
+        return {"key": look, "style": style, "palette": palette, "mode": mode, "shapes": shapes, "formats": formats,
                 "ready": "1x1" in shapes and look not in self.urgent, "files": len(files),
                 "bytes": sum(os.path.getsize(f) for f in files if os.path.exists(f))}
 

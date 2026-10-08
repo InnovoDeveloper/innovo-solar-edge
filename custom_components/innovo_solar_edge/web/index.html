@@ -225,7 +225,7 @@
   const SHAPE_NAMES = { "1x1": "Square", "16x9": "16:9", "4x3": "4:3", "9x10": "9:10", "9x16": "9:16" };
   const PLAY_SECONDS = 8;
   const OPENED = Date.now();  // fresh copies of the style thumbnails each time the page is opened
-  const PAGE_VERSION = "1.16.0";  // kept equal to the integration version (see refresh())
+  const PAGE_VERSION = "1.16.1";  // kept equal to the integration version (see refresh())
   const save = (k, v) => { try { localStorage.setItem("ise." + k, v); } catch (e) {} };
   const load = k => { try { return localStorage.getItem("ise." + k); } catch (e) { return null; } };
   const state = {
@@ -234,6 +234,8 @@
     design: { style: "neon", palette: "neon", mode: "dark" }, designing: false, pending: null,
     pv: { page: "overview", shape: "1x1", key: "", timer: null, abort: null, url: null },
     playing: false, info: null, timer: null, shown: "", galleryKey: "", loading: null,
+    poll: null, waitSince: 0, missing: false,  // checking back while a picture is still being prepared
+    designSig: "",
     removed: new Set(),  // looks removed from this page; hidden until the box's list catches up
   };
   const $ = id => document.getElementById(id);
@@ -400,7 +402,16 @@
   function drawDesigner() {
     const info = state.info, d = state.design;
     $("designer").classList.toggle("hidden", !state.designing);
-    if (!state.designing) return;
+    if (!state.designing) { state.designSig = ""; return; }
+    const key = `${d.style}--${d.palette}-${d.mode}`;
+    const exists = activeLooks().some(l => l.key === key);
+    $("generate").disabled = Boolean(state.pending);
+    $("generate").textContent = exists ? "Show this look" : "Generate";
+    // the page checks back with the box every few seconds while a look is being made:
+    // only rebuild the cards when the choice changed, so thumbnails don't flicker
+    const sig = JSON.stringify([d, (info.styles || []).length, (info.palettes || []).length]);
+    if (sig === state.designSig) { drawPreviewControls(); schedulePreview(); return; }
+    state.designSig = sig;
     const st = $("styles"); st.innerHTML = "";
     for (const s of info.styles || []) {
       const b = document.createElement("button");
@@ -427,10 +438,6 @@
     buttons($("lookmodes"), info.modes || [], d.mode, v => { d.mode = v; drawDesigner(); });
     drawPreviewControls();
     schedulePreview();
-    const key = `${d.style}--${d.palette}-${d.mode}`;
-    const exists = activeLooks().some(l => l.key === key);
-    $("generate").disabled = Boolean(state.pending);
-    $("generate").textContent = exists ? "Show this look" : "Generate";
   }
 
   function draw() {
@@ -460,16 +467,40 @@
     $("single").classList.toggle("hidden", gallery);
     $("gallery").classList.toggle("hidden", !gallery);
     gallery ? drawGallery() : drawSingle();
+    schedulePoll();
   }
 
-  function lookReady() {  // the look's pictures exist for the chosen shape
+  // While anything shown is still being made (a new look, a shape or format not drawn yet,
+  // a picture that didn't load), check back with the box every few seconds and show it as
+  // soon as it's there - no page reload needed.
+  function schedulePoll() {
+    clearTimeout(state.poll); state.poll = null;
+    const waiting = Boolean(state.pending) || !lookReady() || state.missing;
+    if (!waiting) {
+      if (state.waitSince && $("actmsg").dataset.slow) { $("actmsg").textContent = ""; delete $("actmsg").dataset.slow; }
+      state.waitSince = 0; return;
+    }
+    if (!state.waitSince) state.waitSince = Date.now();
+    const slow = Date.now() - state.waitSince > 6 * 60000;
+    if (slow && !$("actmsg").dataset.slow) {
+      $("actmsg").dataset.slow = "1";
+      $("actmsg").textContent = "This is taking longer than expected; the box may be busy. It will show here when it's ready.";
+    }
+    state.poll = setTimeout(() => { state.poll = null; state.missing = false; refresh(); }, slow ? 15000 : 3000);
+  }
+
+  function lookShapes(l) {  // shapes drawn so far in the chosen format
+    return (l.formats && l.formats[state.fmt]) || (state.fmt === "jpg" && l.shapes) || [];
+  }
+  function lookReady() {  // the look's pictures exist for the chosen shape and format
     if (!state.look) return true;
     const l = byKey(state.info.looks, state.look);
-    return Boolean(l && l.ready && (l.shapes || ["1x1"]).includes(state.shape));
+    return Boolean(l && l.ready && lookShapes(l).includes(state.shape));
   }
   function pendingText() {
     const l = byKey(state.info.looks, state.look);
-    return l && l.ready ? `Preparing the ${SHAPE_NAMES[state.shape] || state.shape} pictures…` : "Generating this look…";
+    const what = `${SHAPE_NAMES[state.shape] || state.shape}${state.fmt === "png" ? " PNG" : ""}`;
+    return l && l.ready ? `Preparing the ${what} pictures…` : "Generating this look…";
   }
 
   function drawSingle() {
@@ -490,6 +521,10 @@
       const pre = new Image();
       state.loading = pre;
       pre.onload = () => { if (state.loading === pre) $("screen").src = pre.src; };
+      pre.onerror = () => {  // not there (yet): try again on the next check
+        if (state.loading !== pre) return;
+        state.shown = ""; state.missing = true; schedulePoll();
+      };
       pre.src = name + bust();
     }
     $("screen").alt = `${title(state.view)} screen`;
@@ -514,6 +549,8 @@
       const img = document.createElement("img");
       img.loading = "lazy"; img.alt = `${title(view)} screen`;
       img.src = file(view, state.shape, "lowres") + bust(); img.title = "Open";
+      let tries = 0;  // not there (yet): ask again a few times
+      img.onerror = () => { if (++tries <= 20) setTimeout(() => { img.src = file(view, state.shape, "lowres") + `?t=${Date.now()}`; }, 3000); };
       img.onclick = () => { state.view = view; save("view", view); pick("mode", "single"); };
       const row = document.createElement("div"); row.className = "row";
       const name = document.createElement("b"); name.textContent = title(view);
@@ -587,31 +624,10 @@
     if (!reply) { $("generate").disabled = false; return; }
     msg.textContent = "";
     const look = { key: reply.look || key, style: d.style, palette: d.palette, mode: d.mode, ready: false };
-    state.pending = { key: look.key, look, until: Date.now() + 6 * 60000 };
+    state.pending = { key: look.key, look };  // shown in the Look bar until the box lists it
     state.look = look.key; save("look", look.key); state.designing = false;
-    draw();
-    watch();
-  }
-  async function follow() {  // the remaining shapes of a new look are still being drawn
-    await refresh();
-    const l = byKey(state.info.looks, state.look);
-    if (l && (l.shapes || []).length < Object.keys(state.info.shapes).length) setTimeout(follow, 5000);
-  }
-  async function watch() {
-    if (!state.pending) return;
-    await refresh();
-    const l = byKey(state.info && state.info.looks, state.pending.key);
-    if (l && l.ready) {
-      state.pending = null; state.shown = ""; state.galleryKey = ""; draw();
-      if ((l.shapes || []).length < Object.keys(state.info.shapes).length) setTimeout(follow, 5000);
-      return;
-    }
-    if (Date.now() > state.pending.until) {
-      $("actmsg").classList.add("err");
-      $("actmsg").textContent = "The look is taking longer than expected; the box may be busy. It will appear here when it's ready.";
-      state.pending = null; draw(); return;
-    }
-    setTimeout(watch, 2500);
+    state.shown = ""; state.galleryKey = "";
+    draw();  // shows "Generating this look…" and keeps checking until the pictures are there
   }
   $("remove").onclick = async () => {
     const l = byKey(state.info.looks, state.look);
@@ -671,6 +687,7 @@
       for (const key of [...state.removed]) {
         if (!(state.info.looks || []).some(l => l.key === key)) state.removed.delete(key);
       }
+      if (state.pending && byKey(state.info.looks, state.pending.key)) state.pending = null;  // the box has it now
       const v = state.info.page_version;
       if (v && v !== PAGE_VERSION && !location.search.includes(`v=${v}`)) {  // a cached older page: load the new one
         location.replace(`index.html?v=${encodeURIComponent(v)}`);
@@ -681,7 +698,8 @@
     } catch (e) {
       $("status").textContent = "The energy screens are not available right now.";
     }
-    if (!state.playing) draw();
+    if (state.playing) return;
+    try { draw(); } catch (e) { console.error(e); schedulePoll(); }  // a drawing hiccup must not stop the checks
   }
 
   $("copy").innerHTML = icon("copy");
@@ -698,7 +716,7 @@
   });
 
   refresh();
-  setInterval(() => { if (!state.pending) refresh(); }, 60000);
+  setInterval(() => { if (!state.poll) refresh(); }, 60000);  // the quicker checks cover the waits
 })();
 </script>
 </body>
