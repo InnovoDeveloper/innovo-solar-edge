@@ -79,8 +79,8 @@ THEMES = {
                        (176, 50, 50), (255, 255, 255, 120), (156, 116, 26, 120), ((250, 236, 200), (232, 226, 240)),
                        ink=BLACK, glow=0),
     },
-    "tesla": {
-        "label": "Tesla", "blurb": "Monochrome and sleek, one red accent",
+    "alhazen": {
+        "label": "Alhazen", "blurb": "Monochrome and precise, one red accent",
         "font": "montserrat", "scale": 0.88, "card": "flat", "radius": 0.7, "texture": "none",
         "dark": _mode((8, 8, 9), (14, 14, 16), (242, 242, 242), (150, 150, 150), (78, 78, 82), (232, 33, 39),
                       (236, 236, 236), (150, 150, 150), (186, 186, 190), (120, 120, 126), (76, 217, 100), (150, 220, 255),
@@ -123,17 +123,6 @@ THEMES = {
                        (200, 70, 50), (255, 255, 255, 170), (40, 150, 70, 46), ((220, 245, 210), (240, 245, 200)),
                        ink=BLACK, glow=0),
     },
-    "starship": {
-        "label": "Starship", "blurb": "Starship console bars in orange, peach and lavender",
-        "font": "antonio", "scale": 1.1, "card": "console", "radius": 1.6, "texture": "none",
-        "dark": _mode((0, 0, 0), (4, 4, 10), (255, 224, 196), (156, 156, 210), (100, 100, 150), (255, 153, 0),
-                      (255, 204, 102), (255, 153, 0), (204, 153, 204), (153, 153, 255), (120, 210, 160), (153, 204, 255),
-                      (220, 96, 96), (255, 255, 255, 0), (0, 0, 0, 0), ((0, 0, 0), (0, 0, 0)), glow=0.25),
-        "light": _mode((242, 238, 230), (232, 226, 216), (40, 28, 60), (110, 100, 150), (180, 170, 200), (230, 120, 0),
-                       (220, 150, 30), (230, 110, 0), (170, 100, 170), (100, 100, 220), (40, 160, 100), (60, 140, 220),
-                       (200, 60, 60), (255, 255, 255, 0), (0, 0, 0, 0), ((240, 230, 210), (230, 226, 240)),
-                       ink=BLACK, glow=0),
-    },
     "blueprint": {
         "label": "Blueprint", "blurb": "Engineering drawing: blue paper, white line-work",
         "font": "plexmono", "scale": 0.84, "card": "outline", "radius": 0.15, "texture": "grid",
@@ -147,29 +136,50 @@ THEMES = {
     },
 }
 
-# Graphics styles: how things are drawn, independent of the colours. A theme's own style
-# has the theme's name; any style can be combined with any palette (mix and match).
-#   node:   circle | double | square | pill | orb | gear
-#   route:  curve | ortho | wave | pipe | trace
-#   gauge:  ring | segments | dial
-#   icons:  line | solid | pixel | schematic
-#   chart:  area | bars | steps | line
-#   decor:  none | gears | leaves | stars | sparkles | dims
+# Graphics styles: how things are drawn, independent of the colours; any style works with
+# any palette (mix and match). "scene" is the illustration of the energy flow:
+#   nodes      circles/shapes joined by lines (node, route, decor below)
+#   landscape  sun, hills, house with rooftop panels, trees, pylons, battery cabinet
+#   house      isometric house drawing with roof panels, battery and a lattice pylon
+#   sankey     ribbons as wide as the power they carry
+#   orbit      an orrery: home as a ringed planet, sun / grid / battery on orbits
+#   prism      the sun's beam split by a prism into rays to home, battery and grid
+#   plasma     electrode spheres with lightning arcs (redrawn every refresh)
+#   metro      a transit map: solar, grid and battery lines into a home interchange
+#   circuit    a circuit board: chips, copper traces and vias
+# Other keys: node circle|double|square|pill|orb|gear, route curve|ortho|wave|pipe|trace,
+# gauge ring|segments|dial, icons line|solid|pixel|schematic, chart area|bars|steps|line,
+# decor none|gears|leaves|stars|sparkles|dims, pixel (draw the scene as pixel art).
+# Styles without their own palette name the fonts / cards / texture they use.
+_NODES = {"node": "circle", "route": "curve", "decor": "none"}
 STYLES = {
-    "neon":      {"label": "Neon", "node": "circle", "route": "curve", "gauge": "ring", "icons": "line", "chart": "area", "decor": "none"},
-    "retro":     {"label": "Retro Arcade", "node": "square", "route": "ortho", "gauge": "segments", "icons": "pixel", "chart": "steps", "decor": "stars"},
-    "modern":    {"label": "Modern", "node": "circle", "route": "ortho", "gauge": "ring", "icons": "solid", "chart": "bars", "decor": "none"},
-    "classic":   {"label": "Classic", "node": "double", "route": "curve", "gauge": "dial", "icons": "line", "chart": "line", "decor": "none"},
-    "tesla":     {"label": "Tesla", "node": "circle", "route": "curve", "gauge": "ring", "icons": "line", "chart": "line", "decor": "none"},
-    "steampunk": {"label": "Steampunk", "node": "gear", "route": "pipe", "gauge": "dial", "icons": "line", "chart": "area", "decor": "gears"},
-    "ethereal":  {"label": "Ethereal", "node": "orb", "route": "wave", "gauge": "ring", "icons": "solid", "chart": "area", "decor": "sparkles"},
-    "eco":       {"label": "Eco", "node": "circle", "route": "wave", "gauge": "ring", "icons": "solid", "chart": "bars", "decor": "leaves"},
-    "starship":  {"label": "Starship", "node": "pill", "route": "ortho", "gauge": "segments", "icons": "line", "chart": "bars", "decor": "none"},
-    "blueprint": {"label": "Blueprint", "node": "square", "route": "trace", "gauge": "dial", "icons": "schematic", "chart": "line", "decor": "dims"},
+    "neon":      {"label": "Original (Neon)", "scene": "nodes", **_NODES, "gauge": "ring", "icons": "line", "chart": "area"},
+    "alhazen":   {"label": "Alhazen", "scene": "prism", "gauge": "ring", "icons": "line", "chart": "line"},
+    "modern":    {"label": "Modern", "scene": "sankey", "gauge": "ring", "icons": "solid", "chart": "bars"},
+    "classic":   {"label": "Classic", "scene": "orbit", "gauge": "dial", "icons": "line", "chart": "line"},
+    "eco":       {"label": "Eco", "scene": "landscape", "gauge": "ring", "icons": "solid", "chart": "bars"},
+    "retro":     {"label": "Retro Arcade", "scene": "landscape", "pixel": True, "gauge": "segments", "icons": "pixel",
+                  "chart": "steps", "decor": "stars"},
+    "blueprint": {"label": "Blueprint", "scene": "house", "gauge": "dial", "icons": "schematic", "chart": "line"},
+    "plasma":    {"label": "Plasma", "scene": "plasma", "gauge": "ring", "icons": "solid", "chart": "area",
+                  "palette": "neon", "font": "rajdhani", "scale": 1.0, "card": "glass", "radius": 1.0, "texture": "none"},
+    "metro":     {"label": "Metro", "scene": "metro", "gauge": "segments", "icons": "solid", "chart": "bars",
+                  "palette": "modern", "font": "antonio", "scale": 1.04, "card": "flat", "radius": 1.2, "texture": "none"},
+    "circuit":   {"label": "Circuit", "scene": "circuit", "gauge": "segments", "icons": "schematic", "chart": "steps",
+                  "palette": "eco", "font": "plexmono", "scale": 0.84, "card": "outline", "radius": 0.3, "texture": "grid"},
+    "steampunk": {"label": "Steampunk", "scene": "nodes", "node": "gear", "route": "pipe", "decor": "gears", "gauge": "dial",
+                  "icons": "line", "chart": "area"},
+    "ethereal":  {"label": "Ethereal", "scene": "nodes", "node": "orb", "route": "wave", "decor": "sparkles", "gauge": "ring",
+                  "icons": "solid", "chart": "area"},
 }
 
 MODES = ("dark", "light", "black", "white")  # black / white: the dark / light colours on pure #000 / #FFF
 DEFAULT = "neon-dark"
+
+
+def default_palette(style: str) -> str:
+    """The colours a style comes with."""
+    return STYLES.get(style, {}).get("palette", style if style in THEMES else "neon")
 
 
 def theme_keys() -> list[str]:
@@ -183,7 +193,8 @@ def resolve(key: str | None, style: str | None = None) -> dict:
     name, _, mode = (key or DEFAULT).partition("-")
     theme = THEMES.get(name) or THEMES["neon"]
     look = STYLES.get(style or name) or STYLES.get(name) or STYLES["neon"]
-    graphics = THEMES.get(style or name) or theme  # fonts, cards and texture follow the style
+    # fonts, cards and texture follow the style (its own entry, or the palette of the same name)
+    graphics = look if "font" in look else (THEMES.get(style or name) or theme)
     pure = {"black": ("dark", BLACK), "white": ("light", WHITE)}.get(mode)
     values = dict(theme[pure[0]] if pure else (theme.get(mode) or theme["dark"]))
     if pure:  # solid background: no gradient, colour washes or texture
@@ -197,6 +208,7 @@ def resolve(key: str | None, style: str | None = None) -> dict:
     values.update(WEIGHT_FILE={"bold": bold, "semi": semi, "medium": medium}, FONT_SCALE=graphics["scale"],
                   CARD_STYLE=graphics["card"], RADIUS=graphics["radius"],
                   TEXTURE="none" if pure else graphics["texture"],
-                  NODE_SHAPE=look["node"], ROUTE=look["route"], GAUGE=look["gauge"], ICONS=look["icons"],
-                  CHART=look["chart"], DECOR=look["decor"])
+                  SCENE=look.get("scene", "nodes"), PIXEL_ART=bool(look.get("pixel")),
+                  NODE_SHAPE=look.get("node", "circle"), ROUTE=look.get("route", "curve"), GAUGE=look["gauge"],
+                  ICONS=look["icons"], CHART=look["chart"], DECOR=look.get("decor", "none"))
     return values

@@ -62,6 +62,8 @@ WASHES = ((0, 20, 38), (22, 8, 40))
 GLOW = 1.0
 FONT_SCALE = 1.0
 # graphics style (see themes.STYLES); these are the "neon" values
+SCENE = "nodes"                  # the energy-flow illustration (see scenes.py)
+PIXEL_ART = False
 NODE_SHAPE = "circle"
 ROUTE = "curve"
 GAUGE = "ring"
@@ -546,9 +548,10 @@ class Canvas:
             self.d.rounded_rectangle([(cx - w / 2) * SS, (cy - h / 2) * SS, (cx + w / 2) * SS, (cy + h / 2) * SS],
                                      radius=4 * SS, fill=color + (90,))
         if level is not None:
-            fill_h = (h - 8) * max(min(level, 100), 0) / 100
-            self.d.rectangle([(cx - w / 2 + 4) * SS, (cy + h / 2 - 4 - fill_h) * SS,
-                              (cx + w / 2 - 4) * SS, (cy + h / 2 - 4) * SS], fill=color + (200,))
+            pad = min(4, w * 0.18)  # inset scales with small icons
+            fill_h = (h - 2 * pad) * max(min(level, 100), 0) / 100
+            self.d.rectangle([(cx - w / 2 + pad) * SS, (cy + h / 2 - pad - fill_h) * SS,
+                              (cx + w / 2 - pad) * SS, (cy + h / 2 - pad) * SS], fill=color + (200,))
 
     # --- frame ---
 
@@ -635,7 +638,14 @@ def _flows(v):
 
 
 def _flow_diagram(cv, v, nodes, r=60, compact=False):
-    """Solar / grid / home / battery nodes with live flows between them."""
+    """Solar / grid / home / battery nodes with live flows between them - or the style's
+    illustrated scene (scenes.py) in the same area."""
+    try:
+        from . import scenes
+    except ImportError:  # loaded on its own (tests)
+        import scenes
+    if scenes.draw(cv, v, nodes, r, compact):
+        return
     f = _flows(v)
     S, G, H, B = nodes["solar"], nodes["grid"], nodes["home"], nodes["battery"]
     _decor_behind(cv, nodes, r)
@@ -813,10 +823,12 @@ def _decor_behind(cv, nodes, r):
 
 def _sun_arc(cv, v, cx, cy, rx, ry, labels=True):
     sun = v.get("sun") or {}
+    labels = labels and SCENE == "nodes"  # illustrated scenes put their own sun there
     pts = [(cx + rx * math.cos(math.radians(a)), cy - ry * math.sin(math.radians(a))) for a in range(180, -1, -3)]
-    cv.line(pts, INK, 1.2, alpha=40)
     frac = sun.get("progress")
-    if frac is not None and 0 <= frac <= 1:
+    if SCENE == "nodes":  # illustrated scenes draw their own sun
+        cv.line(pts, INK, 1.2, alpha=40)
+    if SCENE == "nodes" and frac is not None and 0 <= frac <= 1:
         done = [p for i, p in enumerate(pts) if i / (len(pts) - 1) <= frac]
         if len(done) > 1:
             cv.line(done, SOLAR, 2, glow=5, alpha=200)
