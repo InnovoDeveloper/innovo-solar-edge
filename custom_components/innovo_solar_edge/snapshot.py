@@ -31,22 +31,18 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
-from .control import CONTROL_PORT
-from .screens import FORMATS, PAGES, SIZE, VARIANTS, export, is_ready, render
+from .control import handoff_path
+from .screens import FORMATS, PAGES, SIZE, VARIANTS, export, render
 
 _LOGGER = logging.getLogger(__name__)
 
 CONF_SNAPSHOT_FILE = "energy_snapshot_file"
 CONF_PUBLISH_DIR = "energy_publish_dir"
 CONF_PUBLISH_PNG = "energy_publish_png"  # also transparent PNGs
-SITE_PAGE = "index.html"  # viewer page written next to the screens
+SITE_PAGE = "index.html"  # viewer page and its data, written by the web app (webapp/service.py)
 SITE_INFO = "screens.json"
 PREVIEWS = "previews"     # one thumbnail per graphics style, for the design picker
-PAGE_VERSION = "1.15.0"    # must match PAGE_VERSION in web/index.html (old cached pages reload)
-MAX_LOOKS = 4
-PREVIEW_EVERY = 6 * 3600  # seconds between style thumbnail refreshes             # generated looks published live (each costs a full render round)
 LOOK_RE = re.compile(r"^([a-z]+)--([a-z]+)-([a-z]+)$")
-CLEANABLE = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".tmp", ".html", ".json", ".tgz")
 SHAPES_EVERY = 2  # publish the non-square shapes every N minutes (a full set is ~17 s of CPU on an 8-core ARM box)
 INTERVAL = datetime.timedelta(seconds=60)
 SLOW_PAGES = {"solar": 10, "week": 10}  # redraw every N minutes
@@ -176,7 +172,9 @@ def screen_data(model) -> dict:
 
 
 class SnapshotPublisher:
-    """Renders the pages on a timer; keeps the PNG bytes and optional /local files."""
+    """Renders the pages on a timer; keeps the PNG bytes and optional /local files,
+    publishes the original screens to the publish folder and hands the screen data
+    to the web app (control.py), which draws the generated looks."""
 
     def __init__(self, model):
         self.model = model
@@ -186,9 +184,7 @@ class SnapshotPublisher:
         self._unsub = None
         self._ticks = 0
         self._ready = False
-        self._lock = asyncio.Lock()       # one publish round at a time (ticks, generate, clean)
-        self._urgent: list[str] = []      # new looks waiting for their first pictures (served between screens)
-        self._serving = False
+        self._lock = asyncio.Lock()       # one publish round at a time
         if not model.data.get("snapshot_secret"):
             model.data["snapshot_secret"] = secrets.token_urlsafe(12)
             model.save_soon()
@@ -218,171 +214,6 @@ class SnapshotPublisher:
         folder = self.publish_dir
         return os.path.join(folder, f"{page}.jpg") if folder else None
 
-    # --- looks: a graphics style + colour palette + mode, published in their own folder ---
-    @property
-    def looks(self) -> list[str]:
-        return self.model.data.setdefault("looks", [])
-
-    @staticmethod
-    def look_key(style: str, palette: str, mode: str) -> str:
-        from .themes import MODES, STYLES, THEMES
-
-        if style not in STYLES or palette not in THEMES or mode not in MODES:
-            raise ValueError(f"Unknown look: style {style!r}, colours {palette!r}, mode {mode!r}")
-        return f"{style}--{palette}-{mode}"
-
-    @staticmethod
-    def look_data(data: dict, look: str) -> dict:
-        style, palette, mode = LOOK_RE.match(look).groups()
-        return {**data, "_style": style, "_theme": f"{palette}-{mode}"}
-
-    async def async_generate(self, style: str, palette: str, mode: str, wait: bool = True) -> str:
-        """Add a look and publish it right away (in the background if wait=False);
-        returns its folder name."""
-        from homeassistant.exceptions import HomeAssistantError
-
-        if not self.publish_dir:
-            raise HomeAssistantError("Set a publish folder in the integration settings first")
-        try:
-            look = self.look_key(style, palette, mode)
-        except ValueError as err:
-            raise HomeAssistantError(str(err)) from err
-        if look not in self.looks:
-            if len(self.looks) >= MAX_LOOKS:
-                raise HomeAssistantError(f"Up to {MAX_LOOKS} looks; remove one first")
-            self.looks.append(look)
-            self.model.save_soon()
-        if look not in self._urgent:
-            self._urgent.append(look)
-        if wait:
-            await self._publish_new_look(look)
-        else:
-            self.hass.async_create_background_task(self._publish_new_look(look), f"innovo_solar_edge look {look}")
-        return look
-
-    async def _publish_new_look(self, look: str) -> None:
-        """A new look jumps the queue: if a publish round is running, it draws the look
-        between two screens; otherwise it is drawn right now."""
-        data = screen_data(self.model)
-        await self.hass.async_add_executor_job(self._write_site, self.publish_dir, data)  # lists it as "generating" now
-        if not self._lock.locked():
-            async with self._lock:
-                await self.hass.async_add_executor_job(self._serve_urgent, data)
-
-    def _serve_urgent(self, data: dict) -> None:
-        """First pictures for new looks: every view in the square shape (JPG) in a few
-        seconds, then the other shapes; called between screens of a running round."""
-        if self._serving or not self._urgent:
-            return
-        self._serving = True
-        try:
-            while self._urgent:
-                look = self._urgent.pop(0)
-                if look not in self.looks:
-                    continue
-                names = PAGES + list(VARIANTS)
-                self._publish_looks(names, data, ["1x1"], [look], kinds=("jpg",))
-                self._write_site(self.publish_dir, data)  # ready to view
-                others = [shape for shape in FORMATS if shape != "1x1"]
-                self._publish_looks(names, data, others, [look], kinds=("jpg",))
-                self._write_site(self.publish_dir, data)
-        finally:
-            self._serving = False
-
-    async def async_remove(self, look: str) -> None:
-        if look in self.looks:
-            self.looks.remove(look)  # stops publishing it straight away
-            self.model.save_soon()
-        if look in self._urgent:
-            self._urgent.remove(look)
-        if self.publish_dir and LOOK_RE.match(look):
-            # drop it from screens.json now; delete the folder once the current round is done
-            await self.hass.async_add_executor_job(self._write_site, self.publish_dir, screen_data(self.model))
-            async with self._lock:
-                await self.hass.async_add_executor_job(shutil.rmtree, os.path.join(self.publish_dir, look), True)
-                await self.hass.async_add_executor_job(self._write_site, self.publish_dir, screen_data(self.model))
-
-    async def async_clean(self) -> int:
-        """Delete every image or folder in the publish folder that isn't in use."""
-        if not self.publish_dir:
-            return 0
-        async with self._lock:
-            removed = await self.hass.async_add_executor_job(self._clean)
-            await self.hass.async_add_executor_job(self._write_site, self.publish_dir, screen_data(self.model))
-        _LOGGER.info("Cleaned %d unused screen files/folders from %s", removed, self.publish_dir)
-        return removed
-
-    def _cleanable(self) -> list[dict]:
-        """What a clean-up would delete: folders and loose files no look uses
-        (only images, pages, json and archives - anything else is left alone)."""
-        folder = self.publish_dir
-        keep = {SITE_PAGE, SITE_INFO, PREVIEWS, *self.looks, *published_names()}
-        out = []
-        for entry in sorted(os.listdir(folder)):
-            if entry in keep:
-                continue
-            path = os.path.join(folder, entry)
-            if os.path.isdir(path) and not os.path.islink(path):
-                files = [os.path.join(r, f) for r, _, fs in os.walk(path) for f in fs]
-                if all(f.lower().endswith(CLEANABLE) for f in files):
-                    out.append({"name": entry + "/", "files": len(files), "bytes": sum(os.path.getsize(f) for f in files)})
-            elif entry.lower().endswith(CLEANABLE):
-                out.append({"name": entry, "files": 1, "bytes": os.path.getsize(path)})
-        return out
-
-    def _clean(self) -> int:
-        removed = 0
-        for item in self._cleanable():
-            path = os.path.join(self.publish_dir, item["name"].rstrip("/"))
-            if os.path.isdir(path):
-                shutil.rmtree(path, ignore_errors=True)
-            else:
-                os.remove(path)
-            removed += 1
-        return removed
-
-    def _look_info(self, look: str) -> dict:
-        style, palette, mode = LOOK_RE.match(look).groups()
-        last = (PAGES + list(VARIANTS))[-1]  # written last in each round
-        shapes = [shape for shape in FORMATS
-                  if os.path.exists(os.path.join(self.publish_dir, look, f"{last}-{shape}-lowres.jpg"))]
-        return {"key": look, "style": style, "palette": palette, "mode": mode, "shapes": shapes,
-                "ready": "1x1" in shapes and look not in self._urgent, **self._folder_stats(look)}
-
-    def _folder_stats(self, sub: str) -> dict:
-        files = [os.path.join(r, f) for r, _, fs in os.walk(os.path.join(self.publish_dir, sub)) for f in fs]
-        return {"files": len(files), "bytes": sum(os.path.getsize(f) for f in files if os.path.exists(f))}
-
-    async def async_preview(self, style: str, palette: str, mode: str, page: str = "overview",
-                            shape: str = "1x1") -> bytes:
-        """One screen in a look that hasn't been generated, drawn now from live data and
-        returned as JPEG - nothing is written to disk."""
-        look = self.look_key(style, palette, mode)  # validates (ValueError)
-        if page not in PAGES + list(VARIANTS) or shape not in FORMATS:
-            raise ValueError(f"Unknown page {page!r} or shape {shape!r}")
-        data = self.look_data(screen_data(self.model), look)
-
-        def draw() -> bytes:
-            return export(page, data, [shape], ("jpg",))[f"{page}-{shape}-lowres.jpg"]
-
-        return await self.hass.async_add_executor_job(draw)
-
-    async def async_command(self, action: str, payload: dict) -> dict:
-        """Requests from the viewer page (control.py)."""
-        if action == "generate":
-            look = await self.async_generate(payload.get("style", ""), payload.get("palette", ""), payload.get("mode", ""),
-                                             wait=False)
-            return {"look": look}
-        # the page doesn't wait: remove / clean run as soon as the current publish round ends
-        if action == "remove":
-            look = payload.get("look", "")
-            self.hass.async_create_background_task(self.async_remove(look), f"innovo_solar_edge remove {look}")
-            return {"removing": look}
-        if action == "clean":
-            self.hass.async_create_background_task(self.async_clean(), "innovo_solar_edge clean screens")
-            return {"cleaning": True}
-        return {"error": f"unknown action {action!r}"}
-
     @callback
     def start(self) -> None:
         self._unsub = async_track_time_interval(self.hass, self._tick, INTERVAL)
@@ -404,6 +235,8 @@ class SnapshotPublisher:
         ready = data.get("inverter") is not None and data.get("house_w") is not None
         if ready and not self._ready:
             self._ready, force = True, True  # redraw everything once real data has arrived
+        if self.publish_dir:  # the web app draws the generated looks from this
+            await self.hass.async_add_executor_job(self._write_handoff, data)
         pages = [p for p in PAGES if force or p not in self.images or self._ticks % SLOW_PAGES.get(p, 1) == 0]
         for page in pages:
             try:
@@ -417,15 +250,27 @@ class SnapshotPublisher:
                 await self.hass.async_add_executor_job(self._write_file, page, png)
         self.model.notify()
         if self.publish_dir and not self._lock.locked():
-            # every shape of the pages drawn this tick (+ the overview variants), for the
-            # original look and every generated one; the non-square shapes less often, as
-            # they cost several renders each. Skipped while the previous round still runs.
+            # every shape of the pages drawn this tick (+ the overview variants); the
+            # non-square shapes less often, as they cost several renders each.
+            # Skipped while the previous round still runs.
             shapes = None if force or self._ticks % SHAPES_EVERY == 0 else ["1x1"]
             names = pages + (list(VARIANTS) if "overview" in pages else [])
             async with self._lock:
                 await self.hass.async_add_executor_job(self._publish, names, data, shapes)
-                if self.looks:
-                    await self.hass.async_add_executor_job(self._publish_looks, names, data, shapes, list(self.looks))
+
+    def _write_handoff(self, data: dict) -> None:
+        """Screen data for the web app: <config>/.storage/innovo_solar_edge.screen-data.json"""
+        handoff = {
+            "publish_dir": self.publish_dir,
+            "kinds": list(self.publish_kinds),
+            "root_updated": getattr(self, "_root_updated", None),
+            "looks_seed": list(self.model.data.get("looks") or []),  # looks made before the web app ran on its own
+            "data": data,
+        }
+        try:
+            _write_atomic(handoff_path(self.hass), json.dumps(handoff, default=_encode).encode())
+        except (OSError, TypeError, ValueError) as err:
+            _LOGGER.warning("Can't hand the screen data to the web app: %s", err)
 
     def _write_file(self, page: str, image: bytes) -> None:
         folder = self.hass.config.path("www", WWW_DIR)
@@ -439,7 +284,6 @@ class SnapshotPublisher:
         try:
             os.makedirs(folder, exist_ok=True)
             for name in names:
-                self._serve_urgent(data)  # a new look waiting? draw it first
                 try:
                     files = export(name, data, shapes, self.publish_kinds)
                 except Exception:
@@ -451,7 +295,7 @@ class SnapshotPublisher:
                     square = files.get(f"{name}-1x1-lowres.{kind}")
                     if square:
                         _write_atomic(os.path.join(folder, f"{name}.{kind}"), square)
-            self._write_site(folder, data)
+            self._root_updated = dt_util.utcnow().isoformat()
             self._publish_error = None
         except OSError as err:
             if getattr(self, "_publish_error", None) != str(err):  # log each new problem once
@@ -461,85 +305,15 @@ class SnapshotPublisher:
                       time.monotonic() - started)
 
 
-    def _publish_looks(self, names: list[str], data: dict, shapes, looks: list[str], kinds=None) -> None:
-        """Each generated look in its own folder: <publish dir>/<look>/<page>-<shape>-<res>.jpg"""
-        kinds = kinds or self.publish_kinds
-        for look in looks:
-            if not LOOK_RE.match(look):
-                continue
-            sub = os.path.join(self.publish_dir, look)
-            try:
-                os.makedirs(sub, exist_ok=True)
-                styled = self.look_data(data, look)
-                for name in names:
-                    self._serve_urgent(data)  # a new look waiting? draw it first
-                    try:
-                        files = export(name, styled, shapes, kinds)
-                    except Exception:
-                        _LOGGER.exception("Publishing the %s screen in look %s failed", name, look)
-                        continue
-                    for file_name, image in files.items():
-                        _write_atomic(os.path.join(sub, file_name), image)
-                    for kind in kinds:
-                        if square := files.get(f"{name}-1x1-lowres.{kind}"):
-                            _write_atomic(os.path.join(sub, f"{name}.{kind}"), square)
-            except OSError as err:
-                _LOGGER.warning("Can't write look %s: %s", look, err)
-
-    def _write_previews(self, folder: str, data: dict) -> None:
-        """One small thumbnail per graphics style (its own colours, dark), once."""
-        from .themes import STYLES, default_palette
-        from PIL import Image
-        import io
-
-        sub = os.path.join(folder, PREVIEWS)
-        os.makedirs(sub, exist_ok=True)
-        for style in STYLES:
-            target = os.path.join(sub, f"{style}.jpg")
-            try:
-                png = render("live", {**data, "_style": style, "_theme": f"{default_palette(style)}-dark"})
-                img = Image.open(io.BytesIO(png)).convert("RGB").resize((360, 360), Image.LANCZOS)
-                buf = io.BytesIO()
-                img.save(buf, "JPEG", quality=82)
-                _write_atomic(target, buf.getvalue())
-            except Exception:
-                _LOGGER.exception("Style preview %s failed", style)
-
-    def _write_site(self, folder: str, data: dict) -> None:
-        """The viewer page (index.html, once per start) and screens.json (each publish)."""
-        from .themes import BLURBS, MODE_LABELS, MODES, STYLES, THEMES
-
-        def hexes(mode_values):
-            return {k.lower(): "#%02x%02x%02x" % mode_values[k] for k in ("BG_TOP", "TEXT", "CYAN", "SOLAR", "HOME", "GRID", "BATT")}
-
-        pages = [p for p in PAGES + list(VARIANTS) if not (p == "battery" and data.get("has_battery") is False)]
-        api = getattr(self.hass.config, "api", None)
-        info = {
-            "updated": dt_util.utcnow().isoformat(),
-            "pages": pages,
-            "shapes": {shape: {res: f"{w}x{h}" for res, (w, h) in sizes.items()} for shape, sizes in FORMATS.items()},
-            "solar_only": data.get("has_grid") is False,
-            "formats": list(self.publish_kinds),
-            "looks": [self._look_info(look) for look in self.looks if LOOK_RE.match(look)],
-            "cleanable": self._cleanable(),
-            "page_version": PAGE_VERSION,
-            "max_looks": MAX_LOOKS,
-            "styles": [{"key": k, "label": v["label"], "blurb": BLURBS.get(k, ""), "preview": f"{PREVIEWS}/{k}.jpg"}
-                       for k, v in STYLES.items()],
-            "palettes": [{"key": k, "label": v["label"], "dark": hexes(v["dark"]), "light": hexes(v["light"])}
-                         for k, v in THEMES.items()],
-            "modes": [[m, MODE_LABELS[m]] for m in MODES],
-            "control": {"port": CONTROL_PORT, "preview": True},
-        }
-        _write_atomic(os.path.join(folder, SITE_INFO), json.dumps(info).encode())
-        due = time.monotonic() - getattr(self, "_previews_at", -1e9) > PREVIEW_EVERY
-        if due and is_ready("live", data):  # never thumbnails of the "gathering data" placeholder
-            self._previews_at = time.monotonic()
-            self._write_previews(folder, data)
-        if not getattr(self, "_site_written", False):
-            with open(os.path.join(os.path.dirname(__file__), "web", SITE_PAGE), "rb") as handle:
-                _write_atomic(os.path.join(folder, SITE_PAGE), handle.read())
-            self._site_written = True
+def _encode(value):
+    """JSON for the handoff: datetimes as {"__dt__": iso} (the web app turns them back)."""
+    if isinstance(value, datetime.datetime):
+        return {"__dt__": value.isoformat()}
+    if isinstance(value, datetime.date):
+        return value.isoformat()
+    if isinstance(value, (set, tuple)):
+        return list(value)
+    raise TypeError(f"{type(value).__name__} is not JSON serialisable")
 
 
 def published_names() -> list[str]:

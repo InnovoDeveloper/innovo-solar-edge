@@ -1,103 +1,139 @@
-"""A small local HTTP endpoint for the viewer page's Generate / Remove / Clean buttons.
+"""Starts and watches the screens web app (webapp/service.py) as its own process.
 
-The viewer page is served by another web server on the box (plain HTTP). Home
-Assistant itself often runs on HTTPS with a self-signed certificate, which a browser
-won't call from that page, so the integration listens on its own plain-HTTP port,
-answers with CORS headers the page can read, and only accepts requests from the
-local network. The actions are harmless (publish or delete screen images).
+The web app draws the generated looks, answers the viewer page's Generate / Remove /
+Clean buttons and live previews on a plain-HTTP port (Home Assistant itself often runs
+on HTTPS with a self-signed certificate, which a browser won't call from that page),
+and writes the viewer page and screens.json. Running it outside Home Assistant keeps
+its drawing off Home Assistant's threads, and lets it be updated without a Home
+Assistant restart: when any of its files change on disk, it is restarted on its own.
+It is also restarted if it stops, and stopped with the integration.
 """
 
 from __future__ import annotations
 
 import asyncio
-import ipaddress
-import json
+import contextlib
 import logging
+import os
+import sys
 
-from aiohttp import web
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 _LOGGER = logging.getLogger(__name__)
 
 CONTROL_PORT = 8765
-_HEADERS = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Private-Network": "true",
-    "Cache-Control": "no-store",
-}
+HERE = os.path.dirname(os.path.abspath(__file__))
+SERVICE = os.path.join(HERE, "webapp", "service.py")
+WATCHED = [SERVICE, *(os.path.join(HERE, f) for f in ("screens.py", "scenes.py", "themes.py")),
+           os.path.join(HERE, "web", "index.html")]
+WATCH_EVERY = 20  # seconds between checks for updated web app files
+RESTART_DELAY = 5
 
 
-def _local(remote: str | None) -> bool:
-    try:
-        ip = ipaddress.ip_address((remote or "").split("%")[0])
-    except ValueError:
-        return False
-    return ip.is_private or ip.is_loopback or ip.is_link_local
+def handoff_path(hass: HomeAssistant) -> str:
+    """Live screen data the integration hands to the web app every minute."""
+    return hass.config.path(".storage", "innovo_solar_edge.screen-data.json")
 
 
-class ControlServer:
-    def __init__(self, snapshot, port: int = CONTROL_PORT):
-        self.snapshot = snapshot
+def _mtimes() -> tuple:
+    return tuple(os.path.getmtime(p) if os.path.exists(p) else 0 for p in WATCHED)
+
+
+class WebAppSupervisor:
+    def __init__(self, hass: HomeAssistant, port: int = CONTROL_PORT):
+        self.hass = hass
         self.port = port
-        self._runner: web.AppRunner | None = None
-        self._preview_lock = asyncio.Lock()
+        self._proc: asyncio.subprocess.Process | None = None
+        self._task: asyncio.Task | None = None
+        self._stopping = False
 
-    async def async_start(self) -> bool:
-        app = web.Application(client_max_size=64 * 1024)
-        app.router.add_route("OPTIONS", "/{tail:.*}", self._options)
-        app.router.add_get("/ping", self._ping)
-        app.router.add_post("/command", self._command)
-        app.router.add_get("/preview", self._preview)
-        runner = web.AppRunner(app, access_log=None)
-        await runner.setup()
-        try:
-            await web.TCPSite(runner, host="0.0.0.0", port=self.port).start()
-        except OSError as err:
-            await runner.cleanup()
-            _LOGGER.warning("Screens control port %s is not available (%s); the viewer page can't generate looks "
-                            "- use the generate_screens action instead", self.port, err)
-            return False
-        self._runner = runner
-        return True
+    def start(self) -> None:
+        self._task = self.hass.async_create_background_task(self._run(), "innovo_solar_edge web app")
 
     async def async_stop(self) -> None:
-        if self._runner is not None:
-            await self._runner.cleanup()
-            self._runner = None
+        self._stopping = True
+        if self._task:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+        await self._kill()
 
-    async def _options(self, request: web.Request) -> web.Response:
-        return web.Response(status=204, headers=_HEADERS)
-
-    async def _ping(self, request: web.Request) -> web.Response:
-        if not _local(request.remote):
-            return web.json_response({"error": "local network only"}, status=403, headers=_HEADERS)
-        return web.json_response({"ok": True}, headers=_HEADERS)
-
-    async def _preview(self, request: web.Request) -> web.Response:
-        """GET /preview?style=&palette=&mode=&page=&shape= -> JPEG of a look not generated yet.
-        One at a time; a request that arrives while another is drawing waits its turn."""
-        if not _local(request.remote):
-            return web.json_response({"error": "local network only"}, status=403, headers=_HEADERS)
-        q = request.query
+    async def _kill(self) -> None:
+        proc, self._proc = self._proc, None
+        if proc is None or proc.returncode is not None:
+            return
+        proc.terminate()
         try:
-            async with self._preview_lock:
-                image = await self.snapshot.async_preview(q.get("style", ""), q.get("palette", ""), q.get("mode", "dark"),
-                                                          q.get("page", "overview"), q.get("shape", "1x1"))
-        except ValueError as err:
-            return web.json_response({"error": str(err)}, status=400, headers=_HEADERS)
-        except Exception as err:  # noqa: BLE001 - shown on the page
-            _LOGGER.exception("Preview failed")
-            return web.json_response({"error": str(err)}, status=500, headers=_HEADERS)
-        return web.Response(body=image, content_type="image/jpeg", headers=_HEADERS)
+            await asyncio.wait_for(proc.wait(), 5)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
 
-    async def _command(self, request: web.Request) -> web.Response:
-        if not _local(request.remote):
-            return web.json_response({"error": "local network only"}, status=403, headers=_HEADERS)
-        try:
-            body = json.loads(await request.text() or "{}")
-            result = await self.snapshot.async_command(str(body.get("action", "")), body)
-            status = 400 if "error" in result else 200
-        except Exception as err:  # shown on the page
-            result, status = {"error": str(err)}, 400
-        return web.json_response(result, status=status, headers=_HEADERS)
+    async def _run(self) -> None:
+        while not self._stopping:
+            stamp = await self.hass.async_add_executor_job(_mtimes)
+            self._proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-u", SERVICE,
+                "--handoff", handoff_path(self.hass),
+                "--state", self.hass.config.path(".storage", "innovo_solar_edge.webapp.json"),
+                "--port", str(self.port),
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            )
+            _LOGGER.debug("Screens web app started (pid %s)", self._proc.pid)
+            reader = asyncio.ensure_future(self._relay(self._proc))
+            reason = None
+            while reason is None:
+                try:
+                    await asyncio.wait_for(asyncio.shield(self._proc.wait()), WATCH_EVERY)
+                    reason = f"stopped (exit {self._proc.returncode})"
+                except asyncio.TimeoutError:
+                    if await self.hass.async_add_executor_job(_mtimes) != stamp:
+                        reason = "updated"
+            await self._kill()
+            await reader
+            if self._stopping:
+                return
+            if reason == "updated":
+                _LOGGER.info("Screens web app files changed - restarting it")
+            else:
+                _LOGGER.warning("Screens web app %s - restarting in %s s", reason, RESTART_DELAY)
+                await asyncio.sleep(RESTART_DELAY)
+
+    @staticmethod
+    async def _relay(proc) -> None:
+        """The web app's output goes to the Home Assistant log (problems as warnings)."""
+        block: list[str] = []
+        async for raw in proc.stdout:
+            line = raw.decode(errors="replace").rstrip()
+            if line[:4].isdigit() and block:  # a new timestamped message: flush the previous one
+                _flush(block)
+                block = []
+            block.append(line)
+        if block:
+            _flush(block)
+
+
+def _flush(block: list[str]) -> None:
+    text = "\n".join(block)
+    if "Traceback" in text or "failed" in text or "Error" in text:
+        _LOGGER.warning("Screens web app: %s", text)
+    else:
+        _LOGGER.debug("Screens web app: %s", text)
+
+
+async def async_command(hass: HomeAssistant, payload: dict, port: int = CONTROL_PORT) -> dict:
+    """Ask the web app to generate / remove / clean (for the Home Assistant actions)."""
+    import aiohttp
+    from homeassistant.exceptions import HomeAssistantError
+
+    try:
+        async with async_get_clientsession(hass).post(
+            f"http://127.0.0.1:{port}/command", json=payload, timeout=aiohttp.ClientTimeout(total=60)
+        ) as resp:
+            result = await resp.json(content_type=None)
+    except Exception as err:  # noqa: BLE001
+        raise HomeAssistantError(f"The screens web app isn't answering: {err}") from err
+    if "error" in result:
+        raise HomeAssistantError(result["error"])
+    return result

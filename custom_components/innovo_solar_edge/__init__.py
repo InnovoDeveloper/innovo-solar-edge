@@ -6,7 +6,6 @@ import asyncio
 import importlib.metadata
 import logging
 import os
-import secrets
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -185,16 +184,25 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     async def generate_screens(call: ServiceCall) -> ServiceResponse:
         """Publish the screens in a look (graphics style + colours + mode)."""
+        from .control import async_command
+
         snap = energy_model(call).snapshot
-        look = await snap.async_generate(call.data["style"], call.data["colours"], call.data.get("mode", "dark"))
-        return {"look": look, "folder": os.path.join(snap.publish_dir, look)}
+        if not snap.publish_dir:
+            raise HomeAssistantError("Set a publish folder in the integration settings first")
+        result = await async_command(hass, {"action": "generate", "style": call.data["style"],
+                                            "palette": call.data["colours"], "mode": call.data.get("mode", "dark")})
+        return {"look": result["look"], "folder": os.path.join(snap.publish_dir, result["look"])}
 
     async def remove_screens(call: ServiceCall) -> None:
-        await energy_model(call).snapshot.async_remove(call.data["look"])
+        from .control import async_command
+
+        await async_command(hass, {"action": "remove", "look": call.data["look"]})
 
     async def clean_screens(call: ServiceCall) -> ServiceResponse:
         """Delete every published image or folder that isn't in use."""
-        return {"removed": await energy_model(call).snapshot.async_clean()}
+        from .control import async_command
+
+        return {"removed": (await async_command(hass, {"action": "clean"}))["cleaned"]}
 
     hass.services.async_register(
         DOMAIN, "generate_screens", generate_screens,
@@ -328,12 +336,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if energy_model is not None:
         energy_model.async_start()
-        # local endpoint for the viewer page's Generate / Remove / Clean buttons
-        from .control import ControlServer
+        if energy_model.snapshot.publish_dir:
+            # the screens web app (looks, previews, viewer page) runs as its own process
+            from .control import WebAppSupervisor
 
-        control = ControlServer(energy_model.snapshot)
-        if await control.async_start():
-            hass.data[DOMAIN][entry.entry_id]["control"] = control
+            webapp = WebAppSupervisor(hass)
+            webapp.start()
+            hass.data[DOMAIN][entry.entry_id]["webapp"] = webapp
 
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
@@ -374,8 +383,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id)
-        if data.get("control") is not None:
-            await data["control"].async_stop()
+        if data.get("webapp") is not None:
+            await data["webapp"].async_stop()
         if data.get("energy") is not None:
             await data["energy"].async_stop()
 
