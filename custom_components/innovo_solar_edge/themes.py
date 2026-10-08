@@ -173,6 +173,22 @@ STYLES = {
                   "icons": "solid", "chart": "area"},
 }
 
+BLURBS = {
+    "neon": "The original design: glowing nodes and flowing lines",
+    "alhazen": "Sunlight split by a prism into rays to home, battery and grid",
+    "modern": "Ribbons as wide as the power they carry",
+    "classic": "An orrery: home as a ringed planet, sun, grid and battery on orbits",
+    "eco": "Sun over hills, a house with rooftop panels, pylons and a battery",
+    "retro": "The landscape as 8-bit pixel art under a starfield",
+    "blueprint": "An isometric house drawing with roof panels, battery and pylon",
+    "plasma": "Electrode spheres joined by lightning, redrawn every refresh",
+    "metro": "A transit map: solar, grid and battery lines into the home interchange",
+    "circuit": "A circuit board: chips, copper traces and vias",
+    "steampunk": "Gears, pipes with brass collars and dials",
+    "ethereal": "Glowing orbs, waves and sparkles",
+}
+MODE_LABELS = {"dark": "Dark", "light": "Light", "black": "Pure black", "white": "Pure white"}
+
 MODES = ("dark", "light", "black", "white")  # black / white: the dark / light colours on pure #000 / #FFF
 DEFAULT = "neon-dark"
 

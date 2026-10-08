@@ -290,6 +290,52 @@
           "description": "Only change this season (default: all seasons)."
         }
       }
+    },
+    "generate_screens": {
+      "name": "Generate screens in a look",
+      "description": "Publishes every screen in a graphics style, colour palette and mode, in its own folder next to the original screens, and keeps it updated.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Integration entry",
+          "description": "Only needed with more than one inverter hub."
+        },
+        "style": {
+          "name": "Graphics style",
+          "description": "How the energy flow is illustrated."
+        },
+        "colours": {
+          "name": "Colours",
+          "description": "The colour palette."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "dark, light, black (pure black) or white (pure white)."
+        }
+      }
+    },
+    "remove_screens": {
+      "name": "Remove a look",
+      "description": "Stops publishing a generated look and deletes its folder.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Integration entry",
+          "description": "Only needed with more than one inverter hub."
+        },
+        "look": {
+          "name": "Look",
+          "description": "The look's folder name, e.g. plasma--neon-dark."
+        }
+      }
+    },
+    "clean_screens": {
+      "name": "Clean up unused screens",
+      "description": "Deletes every image and folder in the publish folder that isn't the original screens or an active look.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Integration entry",
+          "description": "Only needed with more than one inverter hub."
+        }
+      }
     }
   }
 }

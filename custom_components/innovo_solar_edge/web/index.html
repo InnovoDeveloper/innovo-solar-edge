@@ -7,7 +7,7 @@
 <style>
   :root {
     --bg: #060912; --bg2: #0a1120; --card: rgba(255,255,255,.05); --line: rgba(255,255,255,.12);
-    --text: #ecf1f7; --muted: #808ea2; --cyan: #00e5ff; --green: #00e882;
+    --text: #ecf1f7; --muted: #808ea2; --cyan: #00e5ff; --green: #00e882; --red: #ff5266;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; min-height: 100%; }
@@ -19,6 +19,7 @@
            padding: 18px 16px 10px; max-width: 1400px; margin: 0 auto; }
   .brand { font-size: 12px; letter-spacing: .3em; color: var(--cyan); font-weight: 700; }
   h1 { margin: 2px 0 0; font-size: 26px; letter-spacing: .06em; text-transform: uppercase; }
+  h2 { font-size: 12px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); margin: 14px 0 8px; font-weight: 600; }
   .status { color: var(--muted); font-size: 13px; }
   .status b { color: var(--text); font-weight: 600; }
   main { max-width: 1400px; margin: 0 auto; padding: 0 16px 32px; }
@@ -32,10 +33,31 @@
   }
   button:hover { border-color: rgba(0,229,255,.5); }
   button[aria-pressed="true"] { background: rgba(0,229,255,.14); border-color: var(--cyan); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--cyan); color: #04202a; border-color: var(--cyan); font-weight: 700; padding: 9px 20px; }
+  button.danger { border-color: rgba(255,82,102,.5); color: #ffb3bd; }
   button svg { width: 15px; height: 15px; flex: none; }
   .ico { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .solid { fill: currentColor; }
   button.play[aria-pressed="true"] { background: rgba(0,232,130,.14); border-color: var(--green); }
+  .look-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+  .look-pill .dot.busy { background: #ffc400; }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px 16px; margin: 0 0 16px; }
+  .styles { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); gap: 10px; }
+  .style-card { display: block; text-align: left; border-radius: 12px; padding: 6px; }
+  .style-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; border-radius: 8px; background: #000; }
+  .style-card b { display: block; margin: 6px 2px 0; font-size: 13px; }
+  .style-card small { display: block; margin: 2px 2px 2px; color: var(--muted); font-size: 11.5px; line-height: 1.3; }
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(130px, 100%), 1fr)); gap: 10px; }
+  .swatch { display: block; text-align: left; border-radius: 12px; padding: 8px; }
+  .swatch .chips { display: flex; height: 34px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
+  .swatch .chips i { flex: 1; }
+  .swatch .chips i:first-child { flex: 2.2; }
+  .swatch b { display: block; margin-top: 6px; font-size: 13px; }
+  .gen-row { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-top: 16px; }
+  .msg { font-size: 13px; color: var(--muted); }
+  .msg.err { color: #ffb3bd; }
+  .msg a { color: var(--cyan); }
   .viewer { position: relative; display: grid; place-items: center; background: var(--card);
             border: 1px solid var(--line); border-radius: 16px; padding: 12px; min-height: 240px; overflow: hidden; }
   .viewer img { display: block; max-width: 100%; max-height: calc(100vh - 240px); border-radius: 10px; }
@@ -51,12 +73,12 @@
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 14px; }
   .tile { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px; }
   .tile img { width: 100%; height: auto; border-radius: 8px; display: block; background: #000; cursor: pointer; }
-  .tile img:hover { outline: 1px solid rgba(0,229,255,.5); }
   .tile .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
   .tile b { font-size: 13px; font-weight: 600; }
   .checker img, img.checker { background: repeating-conic-gradient(#3a3f4b 0 25%, #262a33 0 50%) 0 0 / 20px 20px; }
+  .footer { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; justify-content: space-between; margin-top: 18px; }
+  .note { color: var(--muted); font-size: 12px; margin: 0; }
   .hidden { display: none !important; }
-  .note { color: var(--muted); font-size: 12px; margin-top: 18px; }
   @media (max-width: 600px) { h1 { font-size: 20px; } .viewer img { max-height: none; } }
 </style>
 </head>
@@ -66,6 +88,7 @@
   <symbol id="i-check" viewBox="0 0 24 24"><path class="ico" d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path class="solid" d="M7 4.5v15l13-7.5z"/></symbol>
   <symbol id="i-pause" viewBox="0 0 24 24"><rect class="solid" x="6" y="4.5" width="4" height="15" rx="1"/><rect class="solid" x="14" y="4.5" width="4" height="15" rx="1"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path class="ico" d="M12 5v14M5 12h14"/></symbol>
 </svg>
 <header>
   <div>
@@ -75,6 +98,24 @@
   <div class="status" id="status">Loading…</div>
 </header>
 <main>
+  <div class="bar">
+    <span class="label">Look</span>
+    <div class="group" id="looks"></div>
+  </div>
+
+  <section id="designer" class="panel hidden" aria-label="Design a new look">
+    <h2>1 · Design</h2>
+    <div class="styles" id="styles"></div>
+    <h2>2 · Colours</h2>
+    <div class="swatches" id="palettes"></div>
+    <h2>3 · Mode</h2>
+    <div class="group" id="lookmodes"></div>
+    <div class="gen-row">
+      <button id="generate" class="primary" type="button">Generate</button>
+      <span class="msg" id="genmsg"></span>
+    </div>
+  </section>
+
   <div class="bar">
     <span class="label">View</span>
     <div class="group" id="views"></div>
@@ -86,7 +127,7 @@
     <div class="group" id="sizes"></div>
     <span class="label hidden" id="fmt-label">Format</span>
     <div class="group hidden" id="formats"></div>
-    <span class="label">Mode</span>
+    <span class="label">Show</span>
     <div class="group" id="modes"></div>
     <button id="play" class="play" type="button" aria-pressed="false" title="Play the screens one after another (Space)"></button>
   </div>
@@ -103,9 +144,15 @@
   </section>
   <section id="gallery" class="grid hidden"></section>
 
-  <p class="note">Screens refresh by themselves every minute (other shapes every 2 minutes).
-    Use an address in a controller with <code>?t=</code> plus the time added, so it is never cached.
-    Keys: ← → change view, Space play / pause.</p>
+  <div class="footer">
+    <p class="note">Screens refresh by themselves every minute (other shapes every 2 minutes).
+      Keys: ← → change view, Space play / pause.</p>
+    <div class="group">
+      <button id="remove" class="danger hidden" type="button">Remove this look</button>
+      <button id="clean" type="button" title="Delete images and folders that no look uses">Clean up unused images</button>
+    </div>
+  </div>
+  <p class="msg" id="actmsg"></p>
 </main>
 
 <script>
@@ -118,15 +165,26 @@
   const PLAY_SECONDS = 8;
   const save = (k, v) => { try { localStorage.setItem("ise." + k, v); } catch (e) {} };
   const load = k => { try { return localStorage.getItem("ise." + k); } catch (e) { return null; } };
-  const state = { view: load("view") || "overview", shape: load("shape") || "1x1", res: load("res") || "lowres",
-                  mode: load("mode") === "gallery" ? "gallery" : "single", fmt: load("fmt") || "jpg",
-                  playing: false, info: null, timer: null };
+  const state = {
+    view: load("view") || "overview", shape: load("shape") || "1x1", res: load("res") || "lowres",
+    mode: load("mode") === "gallery" ? "gallery" : "single", fmt: load("fmt") || "jpg", look: load("look") || "",
+    design: { style: "neon", palette: "neon", mode: "dark" }, designing: false, pending: null,
+    playing: false, info: null, timer: null,
+  };
   const $ = id => document.getElementById(id);
   const icon = name => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
-  const file = (view, shape, res) => `${view}-${shape}-${res}.${state.fmt}`;
+  const base = () => (state.look ? state.look + "/" : "");
+  const file = (view, shape, res) => `${base()}${view}-${shape}-${res}.${state.fmt}`;
   const address = name => new URL(name, location.href).href;
   const bust = () => `?t=${Math.floor(Date.now() / 1000)}`;
   const title = view => TITLES[view] || view;
+  const byKey = (list, key) => (list || []).find(x => x.key === key);
+  const lookName = l => {
+    const info = state.info || {};
+    const st = byKey(info.styles, l.style), pa = byKey(info.palettes, l.palette);
+    const md = (info.modes || []).find(m => m[0] === l.mode);
+    return `${st ? st.label : l.style} · ${pa ? pa.label : l.palette} · ${md ? md[1] : l.mode}`;
+  };
 
   // ---- copy (Clipboard API needs HTTPS; fall back to a hidden text box on plain HTTP) ----
   async function copyText(text, button) {
@@ -136,11 +194,9 @@
     } catch (e) { ok = false; }
     if (!ok) {
       const box = document.createElement("textarea");
-      box.value = text;
-      box.setAttribute("readonly", "");
+      box.value = text; box.setAttribute("readonly", "");
       box.style.cssText = "position:fixed;top:-1000px;opacity:0";
-      document.body.appendChild(box);
-      box.select();
+      document.body.appendChild(box); box.select();
       try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
       box.remove();
     }
@@ -150,7 +206,6 @@
     clearTimeout(button.timer);
     button.timer = setTimeout(() => { button.classList.remove("done"); button.innerHTML = icon("copy"); }, 1600);
   }
-
   function copyButton(getText) {
     const b = document.createElement("button");
     b.className = "copy"; b.type = "button"; b.title = "Copy address"; b.setAttribute("aria-label", "Copy address");
@@ -159,26 +214,104 @@
     return b;
   }
 
+  // ---- talking to the integration (local webhook; the page then watches screens.json) ----
+  function controlUrl() {
+    const c = (state.info || {}).control || {};
+    if (!c.webhook) return null;
+    return `${c.ssl ? "https" : "http"}://${location.hostname}:${c.port || 8123}/api/webhook/${c.webhook}`;
+  }
+  async function command(body, msgEl) {
+    const url = controlUrl();
+    if (!url) { msgEl.textContent = "This box can't take requests from the page; use the integration's actions in Home Assistant."; msgEl.classList.add("err"); return false; }
+    try {
+      await fetch(url, { method: "POST", mode: "no-cors", body: JSON.stringify(body), headers: { "Content-Type": "text/plain" } });
+      return true;
+    } catch (e) {
+      const home = new URL(url).origin;
+      msgEl.classList.add("err");
+      msgEl.innerHTML = `Couldn't reach Home Assistant from this page. Open <a href="${home}" target="_blank" rel="noopener">${home}</a> once, ` +
+        `accept its security certificate if the browser asks, then try again.`;
+      return false;
+    }
+  }
+
   // ---- drawing ----
   function buttons(el, items, current, onPick) {
     el.innerHTML = "";
     for (const [value, text] of items) {
       const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = text;
+      b.type = "button"; b.textContent = text;
       b.setAttribute("aria-pressed", String(value === current));
       b.onclick = () => onPick(value);
       el.appendChild(b);
     }
   }
 
+  function drawLooks() {
+    const el = $("looks"); el.innerHTML = "";
+    const add = (key, text, ready) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "look-pill";
+      b.setAttribute("aria-pressed", String(!state.designing && key === state.look));
+      b.innerHTML = key ? `<span class="dot${ready ? "" : " busy"}"></span><span></span>` : "<span></span>";
+      b.lastChild.textContent = text + (key && !ready ? " · generating…" : "");
+      b.onclick = () => { state.look = key; state.designing = false; save("look", key); draw(); };
+      el.appendChild(b);
+    };
+    add("", "Original", true);
+    for (const l of state.info.looks || []) add(l.key, lookName(l), l.ready);
+    const n = document.createElement("button");
+    n.type = "button"; n.innerHTML = icon("plus") + "<span>New look</span>";
+    n.setAttribute("aria-pressed", String(state.designing));
+    n.disabled = (state.info.looks || []).length >= (state.info.max_looks || 4);
+    n.title = n.disabled ? `Up to ${state.info.max_looks || 4} looks - remove one first` : "Design a new look";
+    n.onclick = () => { state.designing = !state.designing; draw(); };
+    el.appendChild(n);
+  }
+
+  function drawDesigner() {
+    const info = state.info, d = state.design;
+    $("designer").classList.toggle("hidden", !state.designing);
+    if (!state.designing) return;
+    const st = $("styles"); st.innerHTML = "";
+    for (const s of info.styles || []) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "style-card"; b.setAttribute("aria-pressed", String(s.key === d.style));
+      b.innerHTML = `<img alt="" loading="lazy"><b></b><small></small>`;
+      b.querySelector("img").src = s.preview; b.querySelector("b").textContent = s.label; b.querySelector("small").textContent = s.blurb;
+      b.onclick = () => { d.style = s.key; drawDesigner(); };
+      st.appendChild(b);
+    }
+    const light = d.mode === "light" || d.mode === "white";
+    const pa = $("palettes"); pa.innerHTML = "";
+    for (const p of info.palettes || []) {
+      const c = light ? p.light : p.dark;
+      const bg = d.mode === "black" ? "#000000" : d.mode === "white" ? "#ffffff" : c.bg_top;
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "swatch"; b.setAttribute("aria-pressed", String(p.key === d.palette));
+      b.innerHTML = `<span class="chips"><i style="background:${bg}"></i><i style="background:${c.cyan}"></i><i style="background:${c.solar}"></i>` +
+        `<i style="background:${c.home}"></i><i style="background:${c.grid}"></i><i style="background:${c.batt}"></i></span><b></b>`;
+      b.querySelector("b").textContent = p.label;
+      b.onclick = () => { d.palette = p.key; drawDesigner(); };
+      pa.appendChild(b);
+    }
+    buttons($("lookmodes"), info.modes || [], d.mode, v => { d.mode = v; drawDesigner(); });
+    const key = `${d.style}--${d.palette}-${d.mode}`;
+    const exists = (info.looks || []).some(l => l.key === key);
+    $("generate").disabled = Boolean(state.pending);
+    $("generate").textContent = exists ? "Show this look" : "Generate";
+  }
+
   function draw() {
     const info = state.info;
     if (!info) return;
+    if (state.look && !(info.looks || []).some(l => l.key === state.look)) state.look = "";
     if (!info.pages.includes(state.view)) state.view = info.pages[0];
     if (!info.shapes[state.shape]) state.shape = "1x1";
     const formats = info.formats || ["jpg"];
     if (!formats.includes(state.fmt)) state.fmt = "jpg";
+    drawLooks();
+    drawDesigner();
     const several = formats.length > 1;
     $("fmt-label").classList.toggle("hidden", !several);
     $("formats").classList.toggle("hidden", !several);
@@ -190,6 +323,7 @@
     buttons($("modes"), [["single", "Single"], ["gallery", "All views"]], state.mode, v => pick("mode", v));
     $("play").setAttribute("aria-pressed", String(state.playing));
     $("play").innerHTML = state.playing ? icon("pause") + "<span>Pause</span>" : icon("play") + "<span>Play</span>";
+    $("remove").classList.toggle("hidden", !state.look);
     const gallery = state.mode === "gallery";
     $("single").classList.toggle("hidden", gallery);
     $("gallery").classList.toggle("hidden", !gallery);
@@ -201,69 +335,101 @@
     $("screen").src = name + bust();
     $("screen").alt = `${title(state.view)} screen`;
     const size = state.info.shapes[state.shape][state.res];
-    $("caption").textContent = `${title(state.view)} · ${SHAPE_NAMES[state.shape] || state.shape} · ${size} · ${state.fmt.toUpperCase()}`;
+    const look = state.look ? lookName(byKey(state.info.looks, state.look)) : "Original";
+    $("caption").textContent = `${look} · ${title(state.view)} · ${SHAPE_NAMES[state.shape] || state.shape} · ${size} · ${state.fmt.toUpperCase()}`;
     $("url").textContent = address(name);
   }
 
   function drawGallery() {
-    const g = $("gallery");
-    g.innerHTML = "";
+    const g = $("gallery"); g.innerHTML = "";
     for (const view of state.info.pages) {
-      const tile = document.createElement("div");
-      tile.className = "tile";
+      const tile = document.createElement("div"); tile.className = "tile";
       const img = document.createElement("img");
-      img.loading = "lazy";
-      img.alt = `${title(view)} screen`;
-      img.src = file(view, state.shape, "lowres") + bust();
-      img.title = "Open";
+      img.loading = "lazy"; img.alt = `${title(view)} screen`;
+      img.src = file(view, state.shape, "lowres") + bust(); img.title = "Open";
       img.onclick = () => { state.view = view; save("view", view); pick("mode", "single"); };
-      const row = document.createElement("div");
-      row.className = "row";
-      const name = document.createElement("b");
-      name.textContent = title(view);
+      const row = document.createElement("div"); row.className = "row";
+      const name = document.createElement("b"); name.textContent = title(view);
       row.append(name, copyButton(() => address(file(view, state.shape, state.res))));
-      tile.append(img, row);
-      g.appendChild(tile);
+      tile.append(img, row); g.appendChild(tile);
     }
   }
 
   // ---- play (cycle the views) ----
   function restartProgress() {
     const bar = $("progress");
-    bar.classList.remove("run");
-    bar.style.width = "0";
+    bar.classList.remove("run"); bar.style.width = "0";
     if (!state.playing) return;
-    void bar.offsetWidth;  // restart the CSS transition
+    void bar.offsetWidth;
     bar.style.transitionDuration = PLAY_SECONDS + "s";
-    bar.classList.add("run");
-    bar.style.width = "100%";
+    bar.classList.add("run"); bar.style.width = "100%";
   }
-
   function next(step = 1) {
     const p = state.info.pages;
     state.view = p[(p.indexOf(state.view) + step + p.length) % p.length];
     save("view", state.view);
   }
-
   function setPlaying(on) {
     state.playing = on;
-    clearInterval(state.timer);
-    state.timer = null;
+    clearInterval(state.timer); state.timer = null;
     if (on) {
       if (state.mode === "gallery") { state.mode = "single"; save("mode", "single"); }
       state.timer = setInterval(() => { next(); draw(); restartProgress(); }, PLAY_SECONDS * 1000);
     }
-    draw();
-    restartProgress();
+    draw(); restartProgress();
   }
-
   function pick(key, value) {
-    state[key] = value;
-    save(key, value);
+    state[key] = value; save(key, value);
     if (key === "mode" && value === "gallery" && state.playing) { setPlaying(false); return; }
     draw();
-    if (state.playing) setPlaying(true);  // restart the timer from the picked view
+    if (state.playing) setPlaying(true);
   }
+
+  // ---- generate / remove / clean ----
+  async function generate() {
+    const d = state.design, key = `${d.style}--${d.palette}-${d.mode}`, msg = $("genmsg");
+    msg.classList.remove("err");
+    if ((state.info.looks || []).some(l => l.key === key)) {
+      state.look = key; state.designing = false; save("look", key); draw(); return;
+    }
+    msg.textContent = "Generating… this takes a minute or two.";
+    $("generate").disabled = true;
+    if (!(await command({ action: "generate", style: d.style, palette: d.palette, mode: d.mode }, msg))) {
+      $("generate").disabled = false; return;
+    }
+    state.pending = { key, until: Date.now() + 240000 };
+    watch();
+  }
+  async function watch() {
+    if (!state.pending) return;
+    await refresh();
+    const l = byKey(state.info && state.info.looks, state.pending.key);
+    if (l && l.ready) {
+      state.look = l.key; save("look", l.key); state.designing = false; state.pending = null;
+      $("genmsg").textContent = ""; draw(); return;
+    }
+    if (Date.now() > state.pending.until) {
+      $("genmsg").classList.add("err");
+      $("genmsg").textContent = "No answer yet. The box may be busy, or the request didn't reach Home Assistant - try again in a minute.";
+      state.pending = null; draw(); return;
+    }
+    setTimeout(watch, 3000);
+  }
+  $("remove").onclick = async () => {
+    const l = byKey(state.info.looks, state.look);
+    if (!l || !confirm(`Remove the look "${lookName(l)}" and delete its images?\nAny controller using its addresses will stop updating.`)) return;
+    const msg = $("actmsg"); msg.classList.remove("err"); msg.textContent = "Removing…";
+    if (await command({ action: "remove", look: l.key }, msg)) {
+      state.look = ""; save("look", "");
+      setTimeout(async () => { await refresh(); msg.textContent = ""; }, 2500);
+    }
+  };
+  $("clean").onclick = async () => {
+    if (!confirm("Delete every image and folder here that isn't the original screens or one of your looks?")) return;
+    const msg = $("actmsg"); msg.classList.remove("err"); msg.textContent = "Cleaning up…";
+    if (await command({ action: "clean" }, msg)) setTimeout(async () => { await refresh(); msg.textContent = "Cleaned up."; }, 3000);
+  };
+  $("generate").onclick = generate;
 
   // ---- data ----
   async function refresh() {
@@ -276,7 +442,7 @@
     } catch (e) {
       $("status").textContent = "The energy screens are not available right now.";
     }
-    if (!state.playing) draw();  // while playing, the next slide picks up the new data
+    if (!state.playing) draw();
   }
 
   $("copy").innerHTML = icon("copy");
@@ -287,14 +453,13 @@
     if (e.key === " ") { e.preventDefault(); setPlaying(!state.playing); return; }
     if (state.mode === "gallery") return;
     if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
-      next(e.key === "ArrowRight" ? 1 : -1);
-      draw();
+      next(e.key === "ArrowRight" ? 1 : -1); draw();
       if (state.playing) setPlaying(true);
     }
   });
 
   refresh();
-  setInterval(refresh, 60000);
+  setInterval(() => { if (!state.pending) refresh(); }, 60000);
 })();
 </script>
 </body>

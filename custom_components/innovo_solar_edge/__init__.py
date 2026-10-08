@@ -6,6 +6,7 @@ import asyncio
 import importlib.metadata
 import logging
 import os
+import secrets
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -18,7 +19,7 @@ from homeassistant.const import (
     CONF_SCAN_INTERVAL,
     Platform,
 )
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
 from homeassistant.exceptions import ConfigEntryError, HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
@@ -182,6 +183,35 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         ),
     )
 
+    async def generate_screens(call: ServiceCall) -> ServiceResponse:
+        """Publish the screens in a look (graphics style + colours + mode)."""
+        snap = energy_model(call).snapshot
+        look = await snap.async_generate(call.data["style"], call.data["colours"], call.data.get("mode", "dark"))
+        return {"look": look, "folder": os.path.join(snap.publish_dir, look)}
+
+    async def remove_screens(call: ServiceCall) -> None:
+        await energy_model(call).snapshot.async_remove(call.data["look"])
+
+    async def clean_screens(call: ServiceCall) -> ServiceResponse:
+        """Delete every published image or folder that isn't in use."""
+        return {"removed": await energy_model(call).snapshot.async_clean()}
+
+    hass.services.async_register(
+        DOMAIN, "generate_screens", generate_screens,
+        schema=vol.Schema({vol.Optional("config_entry_id"): cv.string, vol.Required("style"): cv.string,
+                           vol.Required("colours"): cv.string, vol.Optional("mode", default="dark"): cv.string}),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN, "remove_screens", remove_screens,
+        schema=vol.Schema({vol.Optional("config_entry_id"): cv.string, vol.Required("look"): cv.string}),
+    )
+    hass.services.async_register(
+        DOMAIN, "clean_screens", clean_screens,
+        schema=vol.Schema({vol.Optional("config_entry_id"): cv.string}),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
     hass.services.async_register(
         DOMAIN,
         "provision_dashboards",
@@ -298,6 +328,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if energy_model is not None:
         energy_model.async_start()
+        _async_register_screens_webhook(hass, entry, energy_model)
 
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
@@ -331,6 +362,35 @@ def _async_register_devices(hass: HomeAssistant, entry: ConfigEntry, hub, energy
             link(child.device_info, child.via_device[1])
     if energy_model is not None:
         link(energy_model.device_info, energy_model.inverter.uid_base)
+
+
+def _async_register_screens_webhook(hass: HomeAssistant, entry: ConfigEntry, model) -> None:
+    """Local-network webhook for the viewer page's Generate / Remove / Clean buttons.
+    The page is served by another web server, so it posts a simple (no-preflight)
+    request and then watches screens.json for the result."""
+    import json as _json
+
+    from aiohttp import web
+    from homeassistant.components import webhook
+
+    if not model.data.get("webhook_id"):
+        model.data["webhook_id"] = secrets.token_hex(16)
+        model.save_soon()
+    webhook_id = model.data["webhook_id"]
+
+    async def handle(hass: HomeAssistant, wid: str, request) -> web.Response:
+        try:
+            body = _json.loads(await request.text() or "{}")
+            result = await model.snapshot.async_command(str(body.get("action", "")), body)
+            status = 200
+        except Exception as err:  # reported back to the page (when it can read the reply)
+            result, status = {"error": str(err)}, 400
+        return web.json_response(result, status=status, headers={"Access-Control-Allow-Origin": "*"})
+
+    webhook.async_unregister(hass, webhook_id)
+    webhook.async_register(hass, DOMAIN, "Innovo screens", webhook_id, handle, local_only=True,
+                           allowed_methods=["POST"])
+    entry.async_on_unload(lambda: webhook.async_unregister(hass, webhook_id))
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

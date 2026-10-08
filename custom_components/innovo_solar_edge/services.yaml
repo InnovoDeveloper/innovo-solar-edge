@@ -45,3 +45,43 @@ set_tariff_rates:
       example: Summer
       selector:
         text:
+generate_screens:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: innovo_solar_edge
+    style:
+      required: true
+      example: plasma
+      selector:
+        select:
+          options: [neon, alhazen, modern, classic, eco, retro, blueprint, plasma, metro, circuit, steampunk, ethereal]
+    colours:
+      required: true
+      example: neon
+      selector:
+        select:
+          options: [neon, retro, modern, classic, alhazen, steampunk, ethereal, eco, blueprint]
+    mode:
+      example: dark
+      selector:
+        select:
+          options: [dark, light, black, white]
+remove_screens:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: innovo_solar_edge
+    look:
+      required: true
+      example: plasma--neon-dark
+      selector:
+        text:
+clean_screens:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: innovo_solar_edge
