@@ -355,6 +355,7 @@ class WebApp:
             try:
                 if page_written_for != self.folder:
                     self.write_page()
+                    self.write_site()
                     page_written_for = self.folder
                 data = self.data()
                 if woken and not fresh:
@@ -366,6 +367,7 @@ class WebApp:
                     names = [n for n in NAMES if n not in SLOW_PAGES or self.ticks % SLOW_PAGES[n] == 1]
                     for look in list(self.looks):
                         self.publish_look(look, data, names, shapes, self.kinds)
+                        self.write_site()
                     self.updated = datetime.datetime.now(datetime.timezone.utc).isoformat()
                 self.serve_urgent(data)
                 self.write_site()
