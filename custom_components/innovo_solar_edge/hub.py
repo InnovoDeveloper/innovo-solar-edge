@@ -387,7 +387,21 @@ class SolarEdgeModbusMultiHub:
                         new_battery = SolarEdgeBattery(
                             inverter_unit_id, battery_id, self
                         )
-                        await new_battery.init_device()
+                        # Innovo: a battery is only looked for here, at start-up. Right
+                        # after a restart the inverter can still be answering the old
+                        # connection's requests, so one timed-out read would leave the
+                        # battery out until the next restart: try a few times.
+                        # (slot 1 only: slots 2 and 3 are empty on most systems)
+                        tries = 3 if battery_id == 1 else 1
+                        for attempt in range(tries):
+                            try:
+                                await new_battery.init_device()
+                                break
+                            except DeviceInvalid as e:
+                                if attempt == tries - 1 or not str(e).startswith(("Timeout", "Error reading")):
+                                    raise
+                                _LOGGER.debug(f"I{inverter_unit_id}B{battery_id}: {e} - trying again")
+                                await asyncio.sleep(2)
 
                         for battery in self.batteries:
                             if new_battery.serial == battery.serial:
@@ -414,8 +428,13 @@ class SolarEdgeModbusMultiHub:
                         raise HubInitFailed(f"{e}")
 
                     except DeviceInvalid as e:
-                        _LOGGER.debug(f"I{inverter_unit_id}B{battery_id}: {e}")
-                        pass
+                        if battery_id == 1 and str(e).startswith(("Timeout", "Error reading")):  # couldn't tell
+                            _LOGGER.warning(
+                                f"I{inverter_unit_id}B{battery_id}: no answer while looking for a battery ({e}); "
+                                "if this system has one, reload the integration"
+                            )
+                        else:
+                            _LOGGER.debug(f"I{inverter_unit_id}B{battery_id}: {e}")
 
                 # DER Storage Capacity (SunSpec model 713)
                 for der_id, der_storage_model in enumerate(der_storage_models, 1):
