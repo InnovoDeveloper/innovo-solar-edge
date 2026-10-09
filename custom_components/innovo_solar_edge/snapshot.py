@@ -39,6 +39,7 @@ _LOGGER = logging.getLogger(__name__)
 CONF_SNAPSHOT_FILE = "energy_snapshot_file"
 CONF_PUBLISH_DIR = "energy_publish_dir"
 CONF_PUBLISH_PNG = "energy_publish_png"  # also transparent PNGs
+CONF_BATTERY = "energy_battery"          # the site has a battery: show its page, graphs and flows (default on)
 SITE_PAGE = "index.html"  # viewer page and its data, written by the web app (webapp/service.py)
 SITE_INFO = "screens.json"
 PREVIEWS = "previews"     # one thumbnail per graphics style, for the design picker
@@ -48,6 +49,11 @@ INTERVAL = datetime.timedelta(seconds=60)
 SLOW_PAGES = {"solar": 10, "week": 10}  # redraw every N minutes
 WWW_DIR = "innovo_solar_edge"
 MAIN_PAGE = "live"
+
+
+def show_battery(model) -> bool:
+    """The 'This system has a battery' setting: battery page, graphs and flows on or off."""
+    return bool(model.entry.options.get(CONF_BATTERY, True))
 
 
 def screen_data(model) -> dict:
@@ -89,7 +95,7 @@ def screen_data(model) -> dict:
         "avg7": v.get("avg7"),
         "lifetime_avg": v.get("lifetime_avg"),
         "has_grid": model.has_grid,
-        "has_battery": model.has_battery,
+        "has_battery": show_battery(model),
         "inverter_kw": model.inverter_kw,
         "typical_today": v.get("typical_today"),
         "today_vs_typical": v.get("today_vs_typical"),
@@ -99,9 +105,12 @@ def screen_data(model) -> dict:
 
     series = model.data.get("series") or {}
     data["series"] = list(series.get("pts") or []) if series.get("date") == today else []
+    if not data["has_battery"]:  # battery switched off in the settings: no battery anywhere on the screens
+        data.update(battery_w=None, battery_level=None, battery_state=None)
+        data["series"] = [[*p[:4], None, None] for p in data["series"]]
 
     # battery time to full / to reserve
-    bw, level, cap = v.get("battery_w"), v.get("battery_level"), settings.get("battery_kwh") or 0
+    bw, level, cap = data["battery_w"], data["battery_level"], settings.get("battery_kwh") or 0
     reserve = settings.get("reserve") or 0
     if bw and level is not None and cap:
         if bw > 150:

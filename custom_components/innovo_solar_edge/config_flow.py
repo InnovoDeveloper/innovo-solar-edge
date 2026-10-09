@@ -756,6 +756,9 @@ class SolaredgeModbusMultiOptionsFlowHandler(OptionsFlow):
                 "energy_typical_lookup": self.config_entry.options.get(
                     "energy_typical_lookup", True
                 ),
+                "energy_battery": self.config_entry.options.get(
+                    "energy_battery", True
+                ),
                 "energy_snapshot_file": self.config_entry.options.get(
                     "energy_snapshot_file", False
                 ),
@@ -817,6 +820,12 @@ class SolaredgeModbusMultiOptionsFlowHandler(OptionsFlow):
                     vol.Optional(
                         "energy_typical_lookup",
                         default=user_input.get("energy_typical_lookup", True),
+                    ): cv.boolean,
+                    # Innovo: the site has a battery - its page, graphs and flows
+                    # on the screens and dashboards (off: hidden everywhere)
+                    vol.Optional(
+                        "energy_battery",
+                        default=user_input.get("energy_battery", True),
                     ): cv.boolean,
                     # Innovo: publish the dashboard image under /local
                     vol.Optional(

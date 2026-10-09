@@ -49,7 +49,10 @@ def _grid_meter(model: EnergyModel):
 
 
 def _has_battery(model: EnergyModel) -> bool:
-    return model.has_battery
+    """The 'This system has a battery' setting (battery cards and energy-dashboard battery)."""
+    from .snapshot import show_battery
+
+    return show_battery(model)
 
 
 async def async_provision_energy(hass: HomeAssistant, entry: ConfigEntry, model: EnergyModel) -> None:

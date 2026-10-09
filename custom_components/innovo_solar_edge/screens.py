@@ -583,10 +583,11 @@ class Canvas:
     def _footer(self, page):
         if self.data.get("_bare"):
             return
-        n = len(PAGES)
+        pages = [p for p in PAGES if p != "battery" or self.data.get("has_battery") is not False]
+        n = len(pages)
         x0 = self.W / 2 - (n - 1) * 9
         y = self.H - 14
-        for i, p in enumerate(PAGES):
+        for i, p in enumerate(pages):
             x = x0 + i * 18
             if p == page:
                 self.d.rounded_rectangle([(x - 9) * SS, (y - 3) * SS, (x + 9) * SS, (y + 3) * SS], radius=3 * SS, fill=CYAN + (255,))
@@ -647,8 +648,13 @@ def _flow_diagram(cv, v, nodes, r=60, compact=False):
     if scenes.draw(cv, v, nodes, r, compact):
         return
     f = _flows(v)
+    battery = v.get("has_battery") is not False
+    if not battery:  # solar, grid and home only: grid and home move down into the battery's space
+        drop = (nodes["battery"][1] - nodes["grid"][1]) * 0.45
+        nodes = {**nodes, "grid": (nodes["grid"][0], nodes["grid"][1] + drop),
+                 "home": (nodes["home"][0], nodes["home"][1] + drop)}
     S, G, H, B = nodes["solar"], nodes["grid"], nodes["home"], nodes["battery"]
-    _decor_behind(cv, nodes, r)
+    _decor_behind(cv, nodes, r, battery)
     corners = []
 
     def route(a, corner, b):
@@ -675,11 +681,12 @@ def _flow_diagram(cv, v, nodes, r=60, compact=False):
 
     cv.flow(route(S, (H[0], S[1]), H), SOLAR, f["s2h"])
     cv.flow(route(S, (G[0], S[1]), G), SOLAR, f["s2g"])
-    cv.flow(route(S, None, B), SOLAR, f["s2b"])
     cv.flow(route(G, None, H), GRID, f["g2h"])
-    cv.flow(route(B, (H[0], B[1]), H), BATT, f["b2h"])
-    cv.flow(route(G, (G[0], B[1]), B), GRID, f["g2b"])
-    cv.flow(route(B, (G[0], B[1]), G), BATT, f["b2g"])
+    if battery:
+        cv.flow(route(S, None, B), SOLAR, f["s2b"])
+        cv.flow(route(B, (H[0], B[1]), H), BATT, f["b2h"])
+        cv.flow(route(G, (G[0], B[1]), B), GRID, f["g2b"])
+        cv.flow(route(B, (G[0], B[1]), G), BATT, f["b2g"])
     if ROUTE == "trace":  # circuit junctions
         for jx, jy in set(corners):
             cv.circle(jx, jy, 3.4, fill=INK + (230,))
@@ -708,6 +715,8 @@ def _flow_diagram(cv, v, nodes, r=60, compact=False):
          "BUYING" if f["imp"] > 50 else "SELLING" if f["export"] > 50 else "IDLE",
          RED if f["imp"] > 50 else BATT if f["export"] > 50 else MUTED, icon=cv.icon_grid)
     node("home", HOME, "HOME", fmt_kw(f["h"]) + unit, icon=cv.icon_home)
+    if not battery:
+        return
     bx, by = nodes["battery"]
     if level is not None and NODE_SHAPE in ("circle", "double", "orb"):
         cv.arc(bx, by, r + (8 if compact else 12), -90, -90 + 360 * level / 100, 4 if compact else 5, BATT, BATT2, glow=4,
@@ -793,22 +802,24 @@ def _sparkle(cv, cx, cy, size, color):
     cv.g.ellipse([(cx - size) * SS / 2, (cy - size) * SS / 2, (cx + size) * SS / 2, (cy + size) * SS / 2], fill=color)
 
 
-def _decor_behind(cv, nodes, r):
+def _decor_behind(cv, nodes, r, battery=True):
     """The style's decoration around the flow diagram (drawn before it)."""
     S, G, H, B = nodes["solar"], nodes["grid"], nodes["home"], nodes["battery"]
     if DECOR == "gears":
-        for (x, y), size, teeth, rot in ((S, r * 1.9, 16, 0.1), (B, r * 1.5, 12, 0.3),
-                                         ((G[0] - r * 0.8, G[1] + r * 1.4), r * 1.0, 10, 0.0)):
+        gears = [(S, r * 1.9, 16, 0.1), (B, r * 1.5, 12, 0.3), ((G[0] - r * 0.8, G[1] + r * 1.4), r * 1.0, 10, 0.0)]
+        if not battery:
+            del gears[1]
+        for (x, y), size, teeth, rot in gears:
             cv.d.polygon([(px * SS, py * SS) for px, py in _gear(x, y, size, size * 0.86, teeth, rot)],
                          outline=CYAN + (55,), fill=CYAN + (10,))
             cv.circle(x, y, size * 0.35, outline=CYAN + (45,), width=1.2)
     elif DECOR == "leaves":
-        for (x, y), ang in ((H, -60), (H, -20), (B, 200), (G, 230)):
+        for (x, y), ang in ((H, -60), (H, -20), (B, 200), (G, 230)) if battery else ((H, -60), (H, -20), (G, 230)):
             _leaf(cv, x + math.cos(math.radians(ang)) * (r + 4), y + math.sin(math.radians(ang)) * (r + 4), r * 0.75, ang,
                   BATT)
     elif DECOR == "sparkles":
         for (x, y), dx, dy, size in ((S, 1.5, -0.6, 7), (S, -1.6, 0.2, 5), (H, 1.2, -1.1, 6), (G, -1.1, -1.2, 5),
-                                      (B, 1.5, 0.4, 6)):
+                                      (B, 1.5, 0.4, 6))[:None if battery else 4]:
             _sparkle(cv, x + dx * r, y + dy * r, size, mix(CYAN, (255, 255, 255), 0.5))
     elif DECOR == "dims":  # blueprint dimension line under the grid - home span
         y = G[1] + r + 34
@@ -950,7 +961,8 @@ def page_today(data: dict) -> bytes:
     cv = Canvas("today", data)
     v, cur = data, data["currency"]
     cv.card(24, 88, 672, 368)
-    _legend(cv, 44, 102, (("SOLAR", SOLAR), ("HOME", HOME), ("GRID", GRID), ("BATTERY %", BATT)), 120)
+    _legend(cv, 44, 102, (("SOLAR", SOLAR), ("HOME", HOME), ("GRID", GRID))
+            + ((("BATTERY %", BATT),) if v.get("has_battery") is not False else ()), 120)
     pts = _power_chart(cv, v, 44, 118, 640, 290)
 
     t = v.get("today") or {}
@@ -1028,14 +1040,18 @@ def page_overview(data: dict, variant: str | None = None, shape: str = "1x1") ->
             cv.card(*tile)
         return cv.png()
     if variant != "slot":
-        _overview_battery(cv, v, *lay["battery"])
+        if v.get("has_battery") is not False:
+            _overview_battery(cv, v, *lay["battery"])
+        else:
+            _overview_produced(cv, v, *lay["battery"])
     t = v.get("today") or {}
 
     # today chart
     x, y, w, h = lay["chart"]
     cv.card(x, y, w, h)
     cv.text((x + 16, y + 12), "TODAY", 11, MUTED, "semi", spacing=2)
-    _legend(cv, x + 116, y + 12, (("SOLAR", SOLAR), ("HOME", HOME), ("GRID", GRID), ("BATT %", BATT)), 92)
+    _legend(cv, x + 116, y + 12, (("SOLAR", SOLAR), ("HOME", HOME), ("GRID", GRID))
+            + ((("BATT %", BATT),) if v.get("has_battery") is not False else ()), 92)
     cv.text((x + w - 16, y + 12), f"{t.get('solar') or 0:.1f} kWh SOLAR  ·  {v.get('house_today') or 0:.1f} kWh HOME",
             11, MUTED, "semi", anchor="rm", spacing=1)
     _power_chart(cv, v, x + 16, y + 36, w - 32, h - 72, compact=True)
@@ -1139,7 +1155,8 @@ def page_battery(data: dict) -> bytes:
 def page_money(data: dict) -> bytes:
     cv = Canvas("money", data)
     v, cur = data, data["currency"]
-    cv.text((360, 104), "SAVED TODAY BY SOLAR + BATTERY", 13, MUTED, "semi", anchor="mm", spacing=3)
+    cv.text((360, 104), "SAVED TODAY BY SOLAR + BATTERY" if v.get("has_battery") is not False else "SAVED TODAY BY SOLAR",
+            13, MUTED, "semi", anchor="mm", spacing=3)
     cv.glow_text((360, 168), fmt_money(v.get("saved_today"), cur), 92, BATT, "bold")
 
     # price timeline
@@ -1419,7 +1436,6 @@ def page_overview_solar(data: dict, variant: str | None = None, shape: str = "1x
     lay = OVERVIEW_LAYOUTS[shape]
     cv = Canvas("overview", {**data, "_bare": variant == "flow"}, *lay["size"])
     v, cur = data, data["currency"]
-    t = v.get("today") or {}
 
     # solar now (where the live flow is on a full site)
     x, y, w, h = lay["flow"]
@@ -1438,19 +1454,7 @@ def page_overview_solar(data: dict, variant: str | None = None, shape: str = "1x
             cv.card(*tile)
         return cv.png()
     if variant != "slot":
-        x, y, w, h = lay["battery"]
-        k = min(max(min(w / 240, h / 300), 0.8), 1.3)
-        bx = x + w / 2
-        cv.text((x + 16, y + 12), "TODAY", 11, MUTED, "semi", spacing=2)
-        produced = t.get("solar")
-        cv.glow_text((bx, y + h * 0.28), "—" if produced is None else f"{produced:.1f}", round(54 * k), SOLAR, "bold")
-        cv.text((bx, y + h * 0.413), "kWh PRODUCED", 12, MUTED, "semi", anchor="mm", spacing=2)
-        typical, vs = v.get("typical_today"), v.get("today_vs_typical")
-        ry = y + h * 0.707
-        cv.arc(bx, ry, 46 * k, -90, -90 + 360 * min((vs or 0) / 100, 1), 9, SOLAR2, SOLAR, glow=5)
-        cv.text((bx, ry), "—" if vs is None else f"{vs:.0f}%", 20, TEXT, "bold", anchor="mm")
-        cv.text((bx, y + h * 0.913), f"OF TYPICAL {typical:.1f} kWh" if typical else "OF TYPICAL", 11, MUTED,
-                "semi", anchor="mm", spacing=1)
+        _overview_produced(cv, v, *lay["battery"])
 
     # today's chart
     x, y, w, h = lay["chart"]
@@ -1476,6 +1480,23 @@ def page_overview_solar(data: dict, variant: str | None = None, shape: str = "1x
         cv.text((x + 16, y + (40 if big else 30)), value, 40 if big else 32, col, "bold")
         cv.text((x + 16, y + h - 16), sub, 10, MUTED, "semi", anchor="ls", spacing=1)
     return cv.png()
+
+
+def _overview_produced(cv, v, x, y, w, h):
+    """Today's production against a typical day (the overview card on sites without a battery)."""
+    t = v.get("today") or {}
+    k = min(max(min(w / 240, h / 300), 0.8), 1.3)
+    bx = x + w / 2
+    cv.text((x + 16, y + 12), "TODAY", 11, MUTED, "semi", spacing=2)
+    produced = t.get("solar")
+    cv.glow_text((bx, y + h * 0.28), "—" if produced is None else f"{produced:.1f}", round(54 * k), SOLAR, "bold")
+    cv.text((bx, y + h * 0.413), "kWh PRODUCED", 12, MUTED, "semi", anchor="mm", spacing=2)
+    typical, vs = v.get("typical_today"), v.get("today_vs_typical")
+    ry = y + h * 0.707
+    cv.arc(bx, ry, 46 * k, -90, -90 + 360 * min((vs or 0) / 100, 1), 9, SOLAR2, SOLAR, glow=5)
+    cv.text((bx, ry), "—" if vs is None else f"{vs:.0f}%", 20, TEXT, "bold", anchor="mm")
+    cv.text((bx, y + h * 0.913), f"OF TYPICAL {typical:.1f} kWh" if typical else "OF TYPICAL", 11, MUTED,
+            "semi", anchor="mm", spacing=1)
 
 
 def page_today_solar(data: dict) -> bytes:

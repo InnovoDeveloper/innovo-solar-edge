@@ -48,7 +48,7 @@ sys.path.insert(0, PKG)
 import themes  # noqa: E402  (the integration's drawing code, loaded on its own)
 from screens import FORMATS, PAGES, VARIANTS, export, is_ready, render  # noqa: E402
 
-VERSION = "1.17.0"            # also PAGE_VERSION in web/index.html
+VERSION = "1.18.0"            # also PAGE_VERSION in web/index.html
 SITE_PAGE, SITE_INFO, PREVIEWS = "index.html", "screens.json", "previews"
 MAX_LOOKS = 4
 SHAPES_EVERY = 2              # non-square shapes every N minutes
