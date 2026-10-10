@@ -322,26 +322,39 @@ class SolarEdgeModbusMultiHub:
                 new_evse.evse_common.restrict_fields(["C_Version"])
                 continue
 
-            try:
-                _LOGGER.debug(
-                    f"Scanning SunS models at {self.hub_host} ID {inverter_unit_id}"
-                )
-                suns_models = await suns_scan(
-                    self.connection.for_unit(inverter_unit_id), 40000
-                )
-                new_inverter.sunspec_models = suns_models
-
-                der_storage_models = suns_models.get(713, []) if suns_models else []
-
-                for model in suns_models.chain:
+            # Innovo: the scan walks ~20 blocks; one hiccup right after a restart (the
+            # inverter still answering the old connection) failed it, and with it the
+            # DER storage battery (model 713) was silently left out until the next
+            # restart. Try a few times, and say so if it still fails.
+            der_storage_models = []
+            for attempt in range(3):
+                try:
                     _LOGGER.debug(
-                        f"I{inverter_unit_id}: found SunS model {model.model_id} "
-                        f"(length {model.length})"
+                        f"Scanning SunS models at {self.hub_host} ID {inverter_unit_id}"
                     )
+                    suns_models = await suns_scan(
+                        self.connection.for_unit(inverter_unit_id), 40000
+                    )
+                    new_inverter.sunspec_models = suns_models
 
-            except (ModbusError, SunSpecError) as e:
-                _LOGGER.debug(f"I{inverter_unit_id}: SunS model scan failed: {e}")
-                der_storage_models = []
+                    der_storage_models = suns_models.get(713, []) if suns_models else []
+
+                    for model in suns_models.chain:
+                        _LOGGER.debug(
+                            f"I{inverter_unit_id}: found SunS model {model.model_id} "
+                            f"(length {model.length})"
+                        )
+                    break
+
+                except (ModbusError, SunSpecError) as e:
+                    if attempt < 2:
+                        _LOGGER.debug(f"I{inverter_unit_id}: SunS model scan failed: {e} - trying again")
+                        await asyncio.sleep(2)
+                    else:
+                        _LOGGER.warning(
+                            f"I{inverter_unit_id}: couldn't read the inverter's SunSpec block list ({e}); "
+                            "a battery reported there won't be found until the integration is reloaded"
+                        )
 
             if self._detect_meters:
                 for meter_id in METER_REG_BASE:
@@ -387,21 +400,7 @@ class SolarEdgeModbusMultiHub:
                         new_battery = SolarEdgeBattery(
                             inverter_unit_id, battery_id, self
                         )
-                        # Innovo: a battery is only looked for here, at start-up. Right
-                        # after a restart the inverter can still be answering the old
-                        # connection's requests, so one timed-out read would leave the
-                        # battery out until the next restart: try a few times.
-                        # (slot 1 only: slots 2 and 3 are empty on most systems)
-                        tries = 3 if battery_id == 1 else 1
-                        for attempt in range(tries):
-                            try:
-                                await new_battery.init_device()
-                                break
-                            except DeviceInvalid as e:
-                                if attempt == tries - 1 or not str(e).startswith(("Timeout", "Error reading")):
-                                    raise
-                                _LOGGER.debug(f"I{inverter_unit_id}B{battery_id}: {e} - trying again")
-                                await asyncio.sleep(2)
+                        await new_battery.init_device()
 
                         for battery in self.batteries:
                             if new_battery.serial == battery.serial:
@@ -428,13 +427,10 @@ class SolarEdgeModbusMultiHub:
                         raise HubInitFailed(f"{e}")
 
                     except DeviceInvalid as e:
-                        if battery_id == 1 and str(e).startswith(("Timeout", "Error reading")):  # couldn't tell
-                            _LOGGER.warning(
-                                f"I{inverter_unit_id}B{battery_id}: no answer while looking for a battery ({e}); "
-                                "if this system has one, reload the integration"
-                            )
-                        else:
-                            _LOGGER.debug(f"I{inverter_unit_id}B{battery_id}: {e}")
+                        # (inverters that report the battery in SunSpec model 713 below
+                        # often don't answer this block at all - not an error)
+                        _LOGGER.debug(f"I{inverter_unit_id}B{battery_id}: {e}")
+                        pass
 
                 # DER Storage Capacity (SunSpec model 713)
                 for der_id, der_storage_model in enumerate(der_storage_models, 1):
@@ -446,7 +442,17 @@ class SolarEdgeModbusMultiHub:
                         new_der_battery = SolarEdgeDERBattery(
                             inverter_unit_id, der_id, self, der_storage_model
                         )
-                        await new_der_battery.init_device()
+                        # Innovo: only looked for here, at start-up - a read that hits
+                        # a hiccup would leave the battery out until the next restart
+                        for attempt in range(3):
+                            try:
+                                await new_der_battery.init_device()
+                                break
+                            except DeviceInvalid as e:
+                                if attempt == 2 or not str(e).startswith("Error reading"):
+                                    raise
+                                _LOGGER.debug(f"I{inverter_unit_id}DERB{der_id}: {e} - trying again")
+                                await asyncio.sleep(2)
 
                         new_der_battery.via_device = new_inverter.uid_base
                         self.der_batteries.append(new_der_battery)
@@ -463,7 +469,13 @@ class SolarEdgeModbusMultiHub:
                         raise HubInitFailed(f"{e}")
 
                     except DeviceInvalid as e:
-                        _LOGGER.debug(f"I{inverter_unit_id}DERB{der_id}: {e}")
+                        if str(e).startswith("Error reading"):  # it's there, but didn't answer
+                            _LOGGER.warning(
+                                f"I{inverter_unit_id}DERB{der_id}: the battery didn't answer at start-up ({e}); "
+                                "reload the integration to look again"
+                            )
+                        else:
+                            _LOGGER.debug(f"I{inverter_unit_id}DERB{der_id}: {e}")
                         pass
 
             new_inverter.inverter_common.restrict_fields(["C_Version"])
